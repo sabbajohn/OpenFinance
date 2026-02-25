@@ -31,12 +31,12 @@
     },
     "autoload": {
         "psr-4": {
-            "OpenFinanceBrasil\": "lib/"
+            "OpenFinanceBrasil\\": "lib/"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "OpenFinanceBrasil\Test\": "test/"
+            "OpenFinanceBrasil\\Test\\": "test/"
         }
     }
 }
