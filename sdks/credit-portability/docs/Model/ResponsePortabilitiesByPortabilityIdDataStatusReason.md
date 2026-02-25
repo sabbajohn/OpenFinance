@@ -1,0 +1,11 @@
+# # ResponsePortabilitiesByPortabilityIdDataStatusReason
+
+## Properties
+
+Name | Type | Description | Notes
+------------ | ------------- | ------------- | -------------
+**reason_type** | **string** | Motivo de recusa do pedido de portabilidade, onde:  &#x60;CANCELADO_PELO_CLIENTE&#x60; - Cliente desiste do pedido da portabilidade   &#x60;SALDO_DEVEDOR_ATUALIZADO_SUBSTANCIALMENTE_DIVERGENTE&#x60; - Saldo devedor atualizado divergente (superior a 15%) do informado inicialmente   &#x60;POLITICA_DE_CREDITO&#x60; - Proponente desiste da oferta ao cliente por políticas internas   &#x60;RETENCAO_DO_CLIENTE&#x60; - Cliente aceitou contraproposta da instituição credora (dentro do prazo)  &#x60;CONTRATO_JA_LIQUIDADO&#x60; - Contrato liquidado pelo cliente.   &#x60;DIVERGENCIA_DE_PAGAMENTO_EFETUADO&#x60; - Proponente realizou a liquidação com valor divergente   &#x60;DECURSO_DO_PRAZO_PARA_PAGAMENTO&#x60; - Proponente realizou a liquidação fora do prazo   &#x60;PORTABILIDADE_CANCELADA_POR_FALTA_DE_LIQUIDACAO&#x60; - Proponente não realizou a liquidação do contrato   &#x60;PORTABILIDADE_EM_ANDAMENTO&#x60; - Posteriormente à efetivação do pedido de portabilidade, a IF credora identificou que o cliente já possui outro pedido de portabilidade em andamento para o mesmo contrato.   &#x60;CLIENTE_COM_ACAO_JUDICIAL&#x60; - Possui ação judicial   &#x60;MODALIDADE_DA_OPERACAO_INCOMPATIVEL&#x60; - Modalidade divergente da indicada pela instituição proponente  &#x60;OUTROS&#x60; - Motivo da rejeição não se encaixa nas opções disponíveis | [optional]
+**reason_type_additional_info** | **string** | Informação sobre a disponibilidade ou não de um contrato para a portabilidade de crédito. Ao utilizar essa opção, é fortemente recomendável enviar um ticket como sugestão da estrutura Open Finance  para discussão e mapeamento em futuras versões.  [RESTRIÇÃO] Campo de preenchimento obrigatório quando campo &#x60;reasonType&#x60; for igual &#x60;OUTROS&#x60; | [optional]
+**digital_signature_proof** | [**\OpenAPI\Client\Model\ResponsePortabilitiesByPortabilityIdDataStatusReasonDigitalSignatureProof**](ResponsePortabilitiesByPortabilityIdDataStatusReasonDigitalSignatureProof.md) |  | [optional]
+
+[[Back to Model list]](../../README.md#models) [[Back to API list]](../../README.md#endpoints) [[Back to README]](../../README.md)

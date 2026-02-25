@@ -1,0 +1,18 @@
+# # FinancingsContractInterestRate
+
+## Properties
+
+Name | Type | Description | Notes
+------------ | ------------- | ------------- | -------------
+**tax_type** | **string** | \&quot;Tipo de Taxa (vide  Enum) - NOMINAL (taxa nominal é uma taxa de juros em que a unidade referencial não coincide com a unidade de tempo da capitalização. Ela é sempre fornecida em termos anuais, e seus períodos de capitalização podem ser diários, mensais, trimestrais ou semestrais. p.ex. Uma taxa de 12% ao ano com capitalização mensal) - EFETIVA (É a taxa de juros em que a unidade referencial coincide com a unidade de tempo da capitalização. Como as unidades de medida de tempo da taxa de juros e dos períodos de capitalização são iguais, usa-se exemplos simples como 1% ao mês, 60% ao ano)\&quot; |
+**interest_rate_type** | **string** | \&quot;Tipo de Juros  (vide  Enum) - SIMPLES (aplicada/cobrada sempre sobre o capital inicial, que é o valor emprestado/investido. Não há cobrança de juros sobre juros acumulados no(s) período(s) anterior(es). Exemplo: em um empréstimo de R$1.000, com taxa de juros simples de 8% a.a., com duração de 2 anos, o total de juros será R$80 no primeiro ano e R$ 80 no segundo ano. Ao final do contrato, o tomador irá devolver o principal e os juros simples de cada ano: R$1.000+R$80+R$80&#x3D;R$1.160) - COMPOSTO (para cada período do contrato (diário, mensal, anual etc.), há um “novo capital” para a cobrança da taxa de juros contratada. Esse “novo capital” é a soma do capital e do juro cobrado no período anterior. Exemplo: em um empréstimo de R$1.000, com taxa de juros composta de 8% a.a., com duração de 2 anos, o total de juros será R$80 no primeiro ano. No segundo ano, os juros vão ser somados ao capital (R$1.000 + R$ 80 &#x3D; R$ 1.080), resultando em juros de R$ 86 (8%de R$ 1.080))\&quot; |
+**tax_periodicity** | **string** | \&quot;Periodicidade da taxa . (Vide  Enum) a.m - ao mês a.a. - ao ano\&quot; |
+**calculation** | **string** | Base de cálculo |
+**referential_rate_indexer_type** | **string** | \&quot;Tipos de taxas referenciais ou indexadores, conforme Anexo 5: Taxa referencial ou Indexador (Indx), do Documento 3040\&quot; |
+**referential_rate_indexer_sub_type** | **string** | \&quot;Sub tipos de taxas referenciais ou indexadores, conforme Anexo 5: Taxa referencial ou Indexador (Indx), do Documento 3040\&quot; | [optional]
+**referential_rate_indexer_additional_info** | **string** | Campo livre para complementar a informação relativa ao Tipo de taxa referencial ou indexador.  [Restrição] Obrigatório para complementar a informação relativa ao Tipo de taxa referencial ou indexador, quando selecionada o tipo ou subtipo OUTRO. | [optional]
+**pre_fixed_rate** | **float** | Taxa pré fixada aplicada sob o contrato da modalidade crédito. p.ex. 0.014500.    O preenchimento deve respeitar as 6 casas decimais, mesmo que venham preenchidas com zeros(representação de porcentagem p.ex: 0.150000. Este valor representa 15%. O valor 1 representa 100%). | [optional]
+**post_fixed_rate** | **float** | Taxa pós fixada aplicada sob o contrato da modalidade crédito. p.ex. 0.014500.    O preenchimento deve respeitar as 6 casas decimais, mesmo que venham preenchidas com zeros (representação de porcentagem p.ex: 0.150000. Este valor representa 15%. O valor 1 representa 100%). | [optional]
+**additional_info** | **string** | Texto com informações adicionais sobre a composição das taxas de juros pactuadas.   [Restrição] Caso a instituição possua a informação para compartilhamento, esta deverá ser informada. | [optional]
+
+[[Back to Model list]](../../README.md#models) [[Back to API list]](../../README.md#endpoints) [[Back to README]](../../README.md)
