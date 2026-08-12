@@ -13,7 +13,7 @@ Este workspace reúne os repositórios e scripts para gerar SDKs a partir das es
 Tenha instalado na máquina:
 
 - `git`
-- `node` e `npm` (ou `npx`)
+- `node` 22 ou superior e `npm`
 - `php` e `composer`
 
 Opcional (para mocks):
@@ -33,13 +33,13 @@ Opcional (para mocks):
 A partir da raiz do workspace:
 
 ```bash
-cd /Users/johnsabba/Projects/OpenFinance
+npm ci
 ```
 
 ### 1) Gerar SDKs individuais
 
 ```bash
-bash generate-sdks.sh
+npm run generate:sdks
 ```
 
 Resultado esperado:
@@ -49,7 +49,7 @@ Resultado esperado:
 ### 2) Gerar SDK unificado
 
 ```bash
-bash unify-sdks.sh
+npm run generate:unified
 ```
 
 Resultado esperado:
@@ -74,6 +74,7 @@ composer install -d unified-sdk --no-interaction
 
 ```bash
 composer validate -d unified-sdk --no-check-publish
+composer audit -d unified-sdk --locked
 ```
 
 Se quiser validar o compose dos mocks:
@@ -100,16 +101,22 @@ git -C pix-api fetch --all --prune
 - Erro de `composer.json` inválido no `unified-sdk`:
   - execute novamente `bash unify-sdks.sh` e valide com `composer validate -d unified-sdk`
 - Falha no gerador OpenAPI:
-  - confirme internet ativa e execução do `npx` sem bloqueios
+  - execute `npm ci` e confirme internet ativa
 - Scripts sem permissão:
   - execute com `bash generate-sdks.sh` e `bash unify-sdks.sh` (sem precisar `chmod +x`)
 
 ## Comandos rápidos (resumo)
 
 ```bash
-cd /Users/johnsabba/Projects/OpenFinance
-bash generate-sdks.sh
-bash unify-sdks.sh
+npm ci
+npm run generate:sdks
+npm run generate:unified
 composer install -d unified-sdk --no-interaction
 composer validate -d unified-sdk --no-check-publish
+composer audit -d unified-sdk --locked
 ```
+
+## Próxima evolução
+
+O desenho inicial do módulo reutilizável de integrações financeiras está em
+[`docs/modulo-integracoes-financeiras.md`](docs/modulo-integracoes-financeiras.md).

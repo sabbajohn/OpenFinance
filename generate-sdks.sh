@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Caminho para o openapi-generator-cli (usando npx para garantir a versão mais recente)
-GENERATOR="npx @openapitools/openapi-generator-cli"
+# Usa a versão local fixada no package-lock.json para tornar a geração reproduzível.
+GENERATOR="npx --no-install openapi-generator-cli"
 
 # Linguagem alvo (java, php, cpp-restsdk, etc.)
 LANGUAGE="php"

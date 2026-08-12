@@ -33,10 +33,20 @@ declare -a all_apis=()
 declare -a all_models=()
 declare -a all_dependencies=()
 
+# Converte nomes de diretório como "automatic-payments" em identificadores PHP válidos.
+studly_case() {
+  printf '%s' "$1" | awk -F '[-_]' '{
+    for (i = 1; i <= NF; i++) {
+      printf "%s%s", toupper(substr($i, 1, 1)), substr($i, 2)
+    }
+  }'
+}
+
 # Loop através de todos os SDKs
 for sdk_dir in $SDKS_DIR/*/; do
   if [ -d "$sdk_dir" ]; then
     sdk_name=$(basename "$sdk_dir")
+    sdk_prefix=$(studly_case "$sdk_name")
     echo "📦 Processando SDK: $sdk_name"
     
     # Copia APIs com prefixo do domínio
@@ -44,7 +54,7 @@ for sdk_dir in $SDKS_DIR/*/; do
       for api_file in "$sdk_dir/lib/Api"/*.php; do
         if [ -f "$api_file" ]; then
           api_basename=$(basename "$api_file" .php)
-          new_api_name="$(echo ${sdk_name} | sed 's/./\U&/')${api_basename}"
+          new_api_name="${sdk_prefix}${api_basename}"
           
           # Copia e renomeia a classe
           sed "s/class $api_basename/class $new_api_name/g" "$api_file" > "$UNIFIED_DIR/lib/Api/${new_api_name}.php"
@@ -77,7 +87,7 @@ for sdk_dir in $SDKS_DIR/*/; do
               cp "$sdk_dir/test/Model/${model_basename}Test.php" "$UNIFIED_DIR/test/Model/" 2>/dev/null || true
             fi
           else
-            new_model_name="$(echo ${sdk_name} | sed 's/./\U&/')${model_basename}"
+            new_model_name="${sdk_prefix}${model_basename}"
             
             # Copia e renomeia a classe
             sed "s/class $model_basename/class $new_model_name/g" "$model_file" > "$UNIFIED_DIR/lib/Model/${new_model_name}.php"
@@ -121,7 +131,7 @@ cat > $UNIFIED_DIR/composer.json << EOF
         }
     ],
     "require": {
-        "php": "^7.4 || ^8.0",
+        "php": "^8.1",
         "ext-curl": "*",
         "ext-json": "*",
         "ext-mbstring": "*",

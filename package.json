@@ -1,0 +1,15 @@
+{
+  "name": "open-finance-workspace",
+  "private": true,
+  "description": "Workspace para geração dos SDKs PHP do Open Finance Brasil",
+  "scripts": {
+    "generate:sdks": "bash generate-sdks.sh",
+    "generate:unified": "bash unify-sdks.sh"
+  },
+  "devDependencies": {
+    "@openapitools/openapi-generator-cli": "2.40.1"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
