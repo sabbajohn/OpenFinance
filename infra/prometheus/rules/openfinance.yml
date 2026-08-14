@@ -1,0 +1,33 @@
+groups:
+  - name: openfinance-platform
+    rules:
+      - alert: OpenFinanceTargetDown
+        expr: up{job="openfinance-platform"} == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations: { summary: "OpenFinance Platform indisponível" }
+      - alert: OpenFinanceCriticalQueueBacklog
+        expr: openfinance_queue_depth{queue="webhooks-critical"} > 1000
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: "Fila crítica acumulando eventos" }
+      - alert: OpenFinanceOutboxBacklog
+        expr: openfinance_outbox_pending > 1000
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "Outbox durável acumulando eventos" }
+      - alert: OpenFinanceRawPayloadSpoolGrowing
+        expr: openfinance_raw_payload_spooled > 1000
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "Spool PostgreSQL do MinIO está crescendo" }
+      - alert: OpenFinanceWebhookFailures
+        expr: openfinance_webhook_deliveries{status="failed"} > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "Entregas ERP esgotaram tentativas" }
+      - alert: OpenFinanceConnectionActionRequired
+        expr: openfinance_bank_connections{status=~"action_required|failed"} > 0
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "Conexão bancária requer ação" }

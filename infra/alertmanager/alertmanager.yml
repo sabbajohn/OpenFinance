@@ -1,0 +1,10 @@
+route:
+  receiver: default
+  group_by: [alertname]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: default
+    # Configure webhook_configs, slack_configs ou email_configs no ambiente de produção.

@@ -1,0 +1,59 @@
+name: openfinance-observability
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}
+      - --web.enable-lifecycle
+    volumes:
+      - ../infra/prometheus/prometheus.production.yml:/etc/prometheus/prometheus.yml:ro
+      - ../infra/prometheus/rules:/etc/prometheus/rules:ro
+      - ${PROMETHEUS_TARGETS_FILE:?PROMETHEUS_TARGETS_FILE is required}:/etc/prometheus/targets/openfinance.json:ro
+      - ${METRICS_TOKEN_FILE:?METRICS_TOKEN_FILE is required}:/run/secrets/openfinance_metrics_token:ro
+      - prometheus-data:/prometheus
+    ports: ["${ADMIN_BIND_ADDRESS:-127.0.0.1}:${PROMETHEUS_PORT:-9090}:9090"]
+    restart: unless-stopped
+    init: true
+    security_opt: [no-new-privileges:true]
+    networks: [monitoring]
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager"]
+    volumes:
+      - ${ALERTMANAGER_CONFIG_FILE:?ALERTMANAGER_CONFIG_FILE is required}:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports: ["${ADMIN_BIND_ADDRESS:-127.0.0.1}:${ALERTMANAGER_PORT:-9093}:9093"]
+    restart: unless-stopped
+    init: true
+    security_opt: [no-new-privileges:true]
+    networks: [monitoring]
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:?GRAFANA_ROOT_URL is required}
+    volumes:
+      - ../infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports: ["${ADMIN_BIND_ADDRESS:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"]
+    depends_on: [prometheus]
+    restart: unless-stopped
+    init: true
+    security_opt: [no-new-privileges:true]
+    networks: [monitoring]
+
+volumes:
+  prometheus-data:
+  alertmanager-data:
+  grafana-data:
+
+networks:
+  monitoring:
+    driver: bridge

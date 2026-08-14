@@ -1,0 +1,161 @@
+name: openfinance-platform
+x-platform-environment: &platform-environment
+  APP_ENV: local
+  APP_DEBUG: "true"
+  APP_URL: ${APP_URL:-http://localhost:8080}
+  LOG_CHANNEL: stderr
+  LOG_LEVEL: debug
+  DB_CONNECTION: pgsql
+  DB_HOST: postgres
+  DB_PORT: 5432
+  DB_DATABASE: openfinance
+  DB_USERNAME: openfinance
+  DB_PASSWORD: ${POSTGRES_PASSWORD:-local-secret}
+  CACHE_STORE: redis
+  QUEUE_CONNECTION: redis
+  REDIS_CLIENT: predis
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-openfinance}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-local-minio-secret}
+  MINIO_RAW_BUCKET: openfinance-raw
+  MINIO_ENDPOINT: http://minio:9000
+  SESSION_DRIVER: redis
+  SESSION_CONNECTION: cache
+  MAIL_MAILER: smtp
+  MAIL_HOST: mailpit
+  MAIL_PORT: 1025
+  MAIL_USERNAME: null
+  MAIL_PASSWORD: null
+  MAIL_ENCRYPTION: null
+  MAIL_FROM_ADDRESS: no-reply@openfinance.local
+  METRICS_TOKEN: ${METRICS_TOKEN:-local-metrics-secret}
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: platform/Dockerfile
+      target: app-runtime
+    env_file: ./platform/.env
+    environment: *platform-environment
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: platform/Dockerfile
+      target: web
+    ports: ["${HTTP_PORT:-8080}:80"]
+    depends_on: [app]
+    restart: unless-stopped
+
+  horizon:
+    build: { context: ., dockerfile: platform/Dockerfile, target: app-runtime }
+    command: php artisan horizon
+    env_file: ./platform/.env
+    environment: *platform-environment
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck: { disable: true }
+    restart: unless-stopped
+    stop_grace_period: 90s
+
+  scheduler:
+    build: { context: ., dockerfile: platform/Dockerfile, target: app-runtime }
+    command: php artisan schedule:work
+    env_file: ./platform/.env
+    environment: *platform-environment
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck: { disable: true }
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: openfinance
+      POSTGRES_USER: openfinance
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-secret}
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U openfinance -d openfinance"], interval: 5s, timeout: 3s, retries: 20 }
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --maxmemory-policy noeviction
+    volumes: ["redis-data:/data"]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, timeout: 3s, retries: 20 }
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-openfinance}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-local-minio-secret}
+    volumes: ["minio-data:/data"]
+    ports: ["${MINIO_CONSOLE_PORT:-9001}:9001"]
+    healthcheck: { test: ["CMD", "mc", "ready", "local"], interval: 5s, timeout: 3s, retries: 20 }
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-07-21T05-28-08Z
+    depends_on:
+      minio: { condition: service_healthy }
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - mc alias set raw http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" && mc mb --ignore-existing raw/openfinance-raw
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-openfinance}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-local-minio-secret}
+
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports: ["${MAILPIT_PORT:-8025}:8025"]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: [monitoring]
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    ports: ["${PROMETHEUS_PORT:-9090}:9090"]
+    depends_on: [web, alertmanager]
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    profiles: [monitoring]
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    volumes:
+      - ./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    profiles: [monitoring]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-local-grafana-secret}
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports: ["${GRAFANA_PORT:-3000}:3000"]
+    depends_on: [prometheus]
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  prometheus-data:
+  grafana-data:

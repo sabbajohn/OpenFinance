@@ -1,0 +1,166 @@
+name: openfinance-platform
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 20m
+    max-file: "5"
+
+x-security: &security
+  security_opt:
+    - no-new-privileges:true
+
+x-laravel-environment: &laravel-environment
+  APP_NAME: ${APP_NAME:-OpenFinance Platform}
+  APP_ENV: production
+  APP_KEY: ${APP_KEY:?APP_KEY is required}
+  APP_PREVIOUS_KEYS: ${APP_PREVIOUS_KEYS:-}
+  APP_DEBUG: "false"
+  APP_URL: ${APP_URL:?APP_URL is required}
+  APP_LOCALE: pt_BR
+  APP_FALLBACK_LOCALE: pt_BR
+  APP_MAINTENANCE_DRIVER: cache
+  APP_MAINTENANCE_STORE: redis
+  TRUSTED_PROXIES: ${TRUSTED_PROXIES:-*}
+  BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
+  LOG_CHANNEL: stderr
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  DB_CONNECTION: pgsql
+  DB_HOST: ${DB_HOST:?DB_HOST is required}
+  DB_PORT: ${DB_PORT:-6432}
+  DB_DATABASE: ${DB_DATABASE:-openfinance}
+  DB_USERNAME: ${DB_USERNAME:?DB_USERNAME is required}
+  DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+  DB_SSLMODE: ${DB_SSLMODE:-require}
+  CACHE_STORE: redis
+  QUEUE_CONNECTION: redis
+  SESSION_DRIVER: redis
+  SESSION_CONNECTION: cache
+  SESSION_ENCRYPT: "true"
+  SESSION_SECURE_COOKIE: "true"
+  SESSION_SAME_SITE: lax
+  SESSION_DOMAIN: ${SESSION_DOMAIN:-}
+  REDIS_CLIENT: predis
+  REDIS_HOST: ${REDIS_HOST:?REDIS_HOST is required}
+  REDIS_PORT: ${REDIS_PORT:-6379}
+  REDIS_USERNAME: ${REDIS_USERNAME:-}
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+  REDIS_DB: ${REDIS_DB:-0}
+  REDIS_CACHE_DB: ${REDIS_CACHE_DB:-1}
+  REDIS_PREFIX: ${REDIS_PREFIX:-openfinance-production-database-}
+  CACHE_PREFIX: ${CACHE_PREFIX:-openfinance-production-cache-}
+  HORIZON_PREFIX: ${HORIZON_PREFIX:-openfinance-production-horizon:}
+  MAIL_MAILER: ${MAIL_MAILER:-smtp}
+  MAIL_HOST: ${MAIL_HOST:-}
+  MAIL_PORT: ${MAIL_PORT:-587}
+  MAIL_USERNAME: ${MAIL_USERNAME:-}
+  MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+  MAIL_ENCRYPTION: ${MAIL_ENCRYPTION:-tls}
+  MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-no-reply@openfinance.local}
+  MAIL_FROM_NAME: ${MAIL_FROM_NAME:-OpenFinance Platform}
+  FILESYSTEM_DISK: local
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
+  MINIO_REGION: ${MINIO_REGION:-us-east-1}
+  MINIO_RAW_BUCKET: ${MINIO_RAW_BUCKET:-openfinance-raw}
+  MINIO_ENDPOINT: ${MINIO_ENDPOINT:?MINIO_ENDPOINT is required}
+  RAW_PAYLOAD_DISK: raw-payloads
+  RAW_PAYLOAD_RETENTION_DAYS: ${RAW_PAYLOAD_RETENTION_DAYS:-180}
+  BANK_SYNC_INTERVAL_MINUTES: ${BANK_SYNC_INTERVAL_MINUTES:-15}
+  BANK_SYNC_BACKFILL_DAYS: ${BANK_SYNC_BACKFILL_DAYS:-90}
+  BANK_SYNC_OVERLAP_DAYS: ${BANK_SYNC_OVERLAP_DAYS:-3}
+  RECONCILIATION_AUTO_ENABLED: ${RECONCILIATION_AUTO_ENABLED:-true}
+  WEBHOOK_TIMEOUT_SECONDS: ${WEBHOOK_TIMEOUT_SECONDS:-5}
+  WEBHOOK_REPLAY_WINDOW_SECONDS: ${WEBHOOK_REPLAY_WINDOW_SECONDS:-300}
+  WEBHOOK_MAX_ATTEMPTS: ${WEBHOOK_MAX_ATTEMPTS:-12}
+  METRICS_TOKEN: ${METRICS_TOKEN:?METRICS_TOKEN is required}
+
+x-app-runtime: &app-runtime
+  image: ${REGISTRY_IMAGE:?REGISTRY_IMAGE is required}/app:${IMAGE_TAG:?IMAGE_TAG is required}
+  pull_policy: always
+  environment: *laravel-environment
+  init: true
+  restart: unless-stopped
+  logging: *logging
+  <<: *security
+  networks: [platform]
+
+services:
+  app:
+    <<: *app-runtime
+    profiles: [app]
+    command: ["/bin/sh", "-lc", "php artisan config:cache && exec php-fpm -F"]
+    expose: ["9000"]
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "sh", "-c", "SCRIPT_NAME=/up SCRIPT_FILENAME=/var/www/html/public/index.php REQUEST_METHOD=GET cgi-fcgi -bind -connect 127.0.0.1:9000"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+    deploy:
+      resources:
+        limits: { cpus: "2.00", memory: 1024M }
+        reservations: { cpus: "0.25", memory: 256M }
+
+  web:
+    image: ${REGISTRY_IMAGE:?REGISTRY_IMAGE is required}/web:${IMAGE_TAG:?IMAGE_TAG is required}
+    pull_policy: always
+    profiles: [app]
+    init: true
+    restart: unless-stopped
+    depends_on:
+      app: { condition: service_healthy }
+    ports:
+      - ${HTTP_BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-8080}:80
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/up"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    logging: *logging
+    <<: *security
+    networks: [platform]
+    deploy:
+      resources:
+        limits: { cpus: "1.00", memory: 256M }
+        reservations: { cpus: "0.10", memory: 64M }
+
+  horizon:
+    <<: *app-runtime
+    profiles: [workers]
+    command: ["/bin/sh", "-lc", "php artisan config:cache && exec php artisan horizon"]
+    stop_grace_period: 120s
+    healthcheck:
+      test: ["CMD-SHELL", "php artisan horizon:status --no-ansi | grep -q 'running'"]
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 30s
+    deploy:
+      resources:
+        limits: { cpus: "8.00", memory: 4096M }
+        reservations: { cpus: "1.00", memory: 512M }
+
+  scheduler:
+    <<: *app-runtime
+    profiles: [scheduler]
+    command: ["/bin/sh", "-lc", "php artisan config:cache && exec php artisan schedule:work"]
+    stop_grace_period: 30s
+    healthcheck: { disable: true }
+    deploy:
+      resources:
+        limits: { cpus: "1.00", memory: 512M }
+        reservations: { cpus: "0.10", memory: 128M }
+
+  release:
+    <<: *app-runtime
+    profiles: [release]
+    command: ["php", "artisan", "migrate", "--force", "--isolated"]
+    restart: "no"
+    healthcheck: { disable: true }
+
+networks:
+  platform:
+    driver: bridge

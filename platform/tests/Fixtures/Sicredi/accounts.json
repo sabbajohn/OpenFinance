@@ -1,0 +1,12 @@
+{
+    "contas": [
+        {
+            "id": "account-1",
+            "tipo": "CHECKING",
+            "moeda": "BRL",
+            "codigoBanco": "748",
+            "agencia": "0110",
+            "numeroConta": "1234567890"
+        }
+    ]
+}

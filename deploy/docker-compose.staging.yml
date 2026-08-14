@@ -1,0 +1,196 @@
+name: openfinance-staging
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: 20m, max-file: "3" }
+
+x-app-environment: &app-environment
+  APP_NAME: ${APP_NAME:-OpenFinance Platform Staging}
+  APP_ENV: staging
+  APP_KEY: ${APP_KEY:?APP_KEY is required}
+  APP_DEBUG: ${APP_DEBUG:-false}
+  APP_URL: ${APP_URL:?APP_URL is required}
+  TRUSTED_PROXIES: ${TRUSTED_PROXIES:-*}
+  LOG_CHANNEL: stderr
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  DB_CONNECTION: pgsql
+  DB_HOST: postgres
+  DB_PORT: 5432
+  DB_DATABASE: openfinance
+  DB_USERNAME: openfinance
+  DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+  DB_SSLMODE: disable
+  CACHE_STORE: redis
+  QUEUE_CONNECTION: redis
+  SESSION_DRIVER: redis
+  SESSION_CONNECTION: cache
+  SESSION_ENCRYPT: "true"
+  REDIS_CLIENT: predis
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+  REDIS_DB: 0
+  REDIS_CACHE_DB: 1
+  REDIS_PREFIX: openfinance-staging-database-
+  CACHE_PREFIX: openfinance-staging-cache-
+  HORIZON_PREFIX: "openfinance-staging-horizon:"
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
+  MINIO_REGION: us-east-1
+  MINIO_RAW_BUCKET: openfinance-raw
+  MINIO_ENDPOINT: http://minio:9000
+  RAW_PAYLOAD_DISK: raw-payloads
+  RAW_PAYLOAD_RETENTION_DAYS: ${RAW_PAYLOAD_RETENTION_DAYS:-180}
+  BANK_SYNC_INTERVAL_MINUTES: ${BANK_SYNC_INTERVAL_MINUTES:-15}
+  BANK_SYNC_BACKFILL_DAYS: ${BANK_SYNC_BACKFILL_DAYS:-90}
+  BANK_SYNC_OVERLAP_DAYS: ${BANK_SYNC_OVERLAP_DAYS:-3}
+  RECONCILIATION_AUTO_ENABLED: ${RECONCILIATION_AUTO_ENABLED:-false}
+  WEBHOOK_TIMEOUT_SECONDS: 5
+  WEBHOOK_REPLAY_WINDOW_SECONDS: 300
+  WEBHOOK_MAX_ATTEMPTS: 12
+  METRICS_TOKEN: ${METRICS_TOKEN:?METRICS_TOKEN is required}
+
+x-app-runtime: &app-runtime
+  image: ${REGISTRY_IMAGE:?REGISTRY_IMAGE is required}/app:${IMAGE_TAG:?IMAGE_TAG is required}
+  pull_policy: always
+  environment: *app-environment
+  init: true
+  restart: unless-stopped
+  logging: *logging
+  security_opt: [no-new-privileges:true]
+  networks: [staging]
+
+services:
+  app:
+    <<: *app-runtime
+    command: ["/bin/sh", "-lc", "php artisan config:cache && exec php-fpm -F"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+    expose: ["9000"]
+    healthcheck:
+      test: ["CMD", "sh", "-c", "SCRIPT_NAME=/up SCRIPT_FILENAME=/var/www/html/public/index.php REQUEST_METHOD=GET cgi-fcgi -bind -connect 127.0.0.1:9000"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+
+  web:
+    image: ${REGISTRY_IMAGE:?REGISTRY_IMAGE is required}/web:${IMAGE_TAG:?IMAGE_TAG is required}
+    pull_policy: always
+    init: true
+    restart: unless-stopped
+    depends_on:
+      app: { condition: service_healthy }
+    ports: ["${HTTP_BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-8080}:80"]
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/up"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    logging: *logging
+    security_opt: [no-new-privileges:true]
+    networks: [staging]
+
+  horizon:
+    <<: *app-runtime
+    command: ["/bin/sh", "-lc", "php artisan config:cache && exec php artisan horizon"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    stop_grace_period: 120s
+    healthcheck:
+      test: ["CMD-SHELL", "php artisan horizon:status --no-ansi | grep -q 'running'"]
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 30s
+
+  scheduler:
+    <<: *app-runtime
+    command: ["/bin/sh", "-lc", "php artisan config:cache && exec php artisan schedule:work"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck: { disable: true }
+
+  release:
+    <<: *app-runtime
+    profiles: [release]
+    command: ["php", "artisan", "migrate", "--force", "--isolated"]
+    restart: "no"
+    healthcheck: { disable: true }
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: openfinance
+      POSTGRES_USER: openfinance
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openfinance -d openfinance"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    logging: *logging
+    networks: [staging]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"]
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    restart: unless-stopped
+    logging: *logging
+    networks: [staging]
+
+  minio:
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
+    volumes: [minio-data:/data]
+    ports: ["${ADMIN_BIND_ADDRESS:-127.0.0.1}:${MINIO_CONSOLE_PORT:-9001}:9001"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    logging: *logging
+    networks: [staging]
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-07-21T05-28-08Z
+    depends_on:
+      minio: { condition: service_healthy }
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - mc alias set raw http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" && mc mb --ignore-existing raw/openfinance-raw
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
+    restart: "no"
+    networks: [staging]
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+
+networks:
+  staging:
+    driver: bridge

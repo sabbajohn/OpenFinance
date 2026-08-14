@@ -1,0 +1,338 @@
+openapi: 3.1.0
+info:
+  title: OpenFinance Platform API
+  version: 1.0.0
+  description: API multiempresa para espelhos ERP, movimentos bancários, conciliação e recebimentos.
+servers:
+  - url: https://platform.example.com/api/v1
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      security: []
+      operationId: health
+      responses:
+        '200': { description: Serviço disponível }
+  /erp/accounts/bulk:
+    post:
+      operationId: pushErpAccounts
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AccountBulkRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /erp/titles/bulk:
+    post:
+      operationId: pushErpTitles
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TitleBulkRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /bank-transactions:
+    get:
+      operationId: listBankTransactions
+      parameters:
+        - { name: company_id, in: query, schema: { type: string, format: uuid } }
+        - { name: bank_account_id, in: query, schema: { type: string, format: uuid } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200': { description: Página cursor de movimentos }
+  /bank-connections/{id}/sync:
+    post:
+      operationId: syncBankConnection
+      parameters:
+        - { $ref: '#/components/parameters/ResourceId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+  /reconciliations:
+    get:
+      operationId: listReconciliations
+      responses:
+        '200': { description: Página cursor de conciliações e candidatos }
+  /reconciliations/{id}/decisions:
+    post:
+      operationId: decideReconciliation
+      parameters:
+        - { $ref: '#/components/parameters/ResourceId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReconciliationDecision' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        '409': { description: Decisão concorrente ou versão obsoleta }
+  /reconciliation-decisions/{id}/confirm:
+    post:
+      operationId: confirmReconciliationDecision
+      parameters:
+        - { $ref: '#/components/parameters/ResourceId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { description: Decisão confirmada com IDs de liquidação ERP }
+  /reconciliation-decisions/{id}/reject:
+    post:
+      operationId: rejectReconciliationDecision
+      parameters:
+        - { $ref: '#/components/parameters/ResourceId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { description: Decisão rejeitada; caso reaberto }
+  /pix/charges:
+    post:
+      operationId: createPixCharge
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReceivableRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+  /boletos:
+    post:
+      operationId: createBoleto
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReceivableRequest' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+  /receivables/{id}:
+    get:
+      operationId: getReceivable
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '200': { description: Cobrança e histórico de operações }
+  /receivables/{id}/refresh:
+    post:
+      operationId: refreshReceivable
+      parameters:
+        - { $ref: '#/components/parameters/ResourceId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+  /pix/charges/{id}/refunds:
+    post:
+      operationId: refundPix
+      parameters:
+        - { $ref: '#/components/parameters/ResourceId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount_minor]
+              properties:
+                amount_minor: { $ref: '#/components/schemas/MoneyMinor' }
+                external_transaction_id: { type: [string, 'null'], description: EndToEndId quando diferente do identificador da cobrança }
+                refund_id: { type: [string, 'null'] }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+  /boletos/{id}:
+    patch:
+      operationId: updateBoleto
+      parameters:
+        - { $ref: '#/components/parameters/ResourceId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount_minor: { $ref: '#/components/schemas/MoneyMinor' }
+                due_at: { type: string, format: date }
+                payer: { type: object, additionalProperties: true }
+                options: { type: object, additionalProperties: true }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+  /boletos/{id}/cancel:
+    post:
+      operationId: cancelBoleto
+      parameters:
+        - { $ref: '#/components/parameters/ResourceId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+  /webhooks/banks/{id}:
+    post:
+      security: []
+      operationId: receiveBankWebhook
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        '401': { description: Assinatura bancária inválida }
+  /webhook-deliveries/{id}/replay:
+    post:
+      operationId: replayWebhookDelivery
+      parameters:
+        - { $ref: '#/components/parameters/ResourceId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+  /api-clients:
+    get:
+      operationId: listApiClients
+      responses:
+        '200': { description: Clientes sem hash ou token em texto puro }
+    post:
+      operationId: createApiClient
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, scopes]
+              properties:
+                name: { type: string }
+                company_id: { type: [string, 'null'], format: uuid }
+                scopes: { type: array, items: { type: string } }
+                allowed_ips: { type: array, items: { type: string, format: ipv4 } }
+                expires_at: { type: [string, 'null'], format: date-time }
+      responses:
+        '201': { description: Cliente e token exibido uma única vez }
+  /api-clients/{id}/rotate:
+    post:
+      operationId: rotateApiClient
+      parameters:
+        - { $ref: '#/components/parameters/ResourceId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '201': { description: Cliente substituto e token exibido uma única vez }
+  /webhook-endpoints:
+    get:
+      operationId: listWebhookEndpoints
+      responses:
+        '200': { description: Endpoints sem o segredo em texto puro }
+    post:
+      operationId: createWebhookEndpoint
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, url, events]
+              properties:
+                company_id: { type: [string, 'null'], format: uuid }
+                name: { type: string }
+                url: { type: string, format: uri }
+                events: { type: array, items: { type: string } }
+      responses:
+        '201': { description: Endpoint e segredo HMAC exibido uma única vez }
+webhooks:
+  erpEvents:
+    post:
+      parameters:
+        - { name: X-OpenFinance-Delivery, in: header, required: true, schema: { type: string, format: uuid } }
+        - { name: X-OpenFinance-Timestamp, in: header, required: true, schema: { type: string } }
+        - { name: X-OpenFinance-Signature, in: header, required: true, schema: { type: string, pattern: '^sha256=' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventEnvelope' }
+      responses:
+        '200': { description: Processado ou já processado }
+        '202': { description: Persistido para processamento assíncrono }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+  parameters:
+    ResourceId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, maxLength: 200 } }
+  responses:
+    Accepted: { description: Persistido ou enfileirado com sucesso }
+    ValidationError: { description: Dados inválidos }
+  schemas:
+    MoneyMinor: { type: integer, format: int64, minimum: 0, description: Valor em unidades mínimas; centavos para BRL }
+    AccountBulkRequest:
+      type: object
+      required: [company_id, erp_connection_id, items]
+      properties:
+        company_id: { type: string, format: uuid }
+        erp_connection_id: { type: string, format: uuid }
+        items:
+          type: array
+          maxItems: 1000
+          items:
+            type: object
+            required: [external_id, name]
+            properties:
+              external_id: { type: string }
+              name: { type: string }
+              bank_account_id: { type: [string, 'null'], format: uuid }
+    TitleBulkRequest:
+      type: object
+      required: [company_id, erp_connection_id, items]
+      properties:
+        company_id: { type: string, format: uuid }
+        erp_connection_id: { type: string, format: uuid }
+        items:
+          type: array
+          maxItems: 1000
+          items:
+            type: object
+            required: [external_id, type, status, description, amount_minor, open_amount_minor]
+            properties:
+              external_id: { type: string }
+              external_version: { type: [string, 'null'] }
+              type: { type: string, enum: [receivable, payable] }
+              status: { type: string, enum: [open, paid, cancelled] }
+              description: { type: string }
+              amount_minor: { $ref: '#/components/schemas/MoneyMinor' }
+              open_amount_minor: { $ref: '#/components/schemas/MoneyMinor' }
+              identifiers: { type: object, additionalProperties: { type: [string, 'null'] } }
+    ReconciliationDecision:
+      type: object
+      required: [action, expected_version, payload]
+      properties:
+        action: { type: string, enum: [match, split, partial, adjust, classify, ignore, reverse] }
+        expected_version: { type: integer, minimum: 1 }
+        payload: { type: object, additionalProperties: true }
+    ReceivableRequest:
+      type: object
+      required: [erp_title_id, bank_connection_id]
+      properties:
+        erp_title_id: { type: string, format: uuid }
+        bank_connection_id: { type: string, format: uuid }
+        amount_minor: { $ref: '#/components/schemas/MoneyMinor' }
+        subtype: { type: string, enum: [immediate, due, normal, hybrid] }
+        due_at: { type: [string, 'null'], format: date }
+        payer: { type: object, additionalProperties: true }
+        options: { type: object, additionalProperties: true }
+    EventEnvelope:
+      type: object
+      required: [id, type, schema_version, occurred_at, organization_id, company_id, correlation_id, data]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string }
+        schema_version: { type: integer }
+        occurred_at: { type: string, format: date-time }
+        organization_id: { type: string, format: uuid }
+        company_id: { type: [string, 'null'], format: uuid }
+        correlation_id: { type: [string, 'null'] }
+        data: { type: object, additionalProperties: true }

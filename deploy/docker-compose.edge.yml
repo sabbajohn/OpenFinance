@@ -1,0 +1,27 @@
+name: openfinance-edge
+
+services:
+  haproxy:
+    image: haproxy:3.2-alpine
+    environment:
+      APP_NODE_1: ${APP_NODE_1:?APP_NODE_1 is required}
+      APP_NODE_2: ${APP_NODE_2:?APP_NODE_2 is required}
+      TLS_CERT_PATH: /etc/haproxy/certs/${TLS_CERT_NAME:-platform.pem}
+    volumes:
+      - ../infra/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ${TLS_CERT_DIRECTORY:?TLS_CERT_DIRECTORY is required}:/etc/haproxy/certs:ro
+    ports:
+      - ${EDGE_BIND_ADDRESS:-0.0.0.0}:80:80
+      - ${EDGE_BIND_ADDRESS:-0.0.0.0}:443:443
+      - ${ADMIN_BIND_ADDRESS:-127.0.0.1}:${HAPROXY_STATS_PORT:-8404}:8404
+    healthcheck:
+      test: ["CMD", "haproxy", "-c", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    init: true
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: json-file
+      options: { max-size: 20m, max-file: "5" }

@@ -1,0 +1,16 @@
+{
+    "lancamentos": [
+        {
+            "id": "transaction-1",
+            "valor": "10.25",
+            "natureza": "CREDITO",
+            "status": "EFETIVADO",
+            "data": "2026-08-12T12:00:00-03:00",
+            "historico": "PIX recebido",
+            "nomeContraparte": "Cliente Fixture",
+            "documentoContraparte": "12345678000190",
+            "endToEndId": "E74820260812000000001"
+        }
+    ],
+    "nextCursor": "next-page"
+}

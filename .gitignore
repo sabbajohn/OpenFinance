@@ -1,2 +1,8 @@
 .DS_Store
 node_modules/
+deploy/env/*.env
+deploy/secrets/*
+deploy/state/
+infra/prometheus/targets/openfinance.json
+!deploy/env/*.env.example
+!deploy/secrets/.gitkeep

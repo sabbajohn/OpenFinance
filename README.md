@@ -1,122 +1,57 @@
-# OpenFinance Workspace
+# OpenFinance Platform
 
-Este workspace reúne os repositórios e scripts para gerar SDKs a partir das especificações OpenAPI do Open Finance Brasil.
+Hub bancário SaaS multiempresa para integrar bancos e ERPs com processamento durável, conciliação auditável, Pix e boletos.
 
-## O que este README cobre
+## Estrutura
 
-- Gerar SDKs individuais em `sdks/` a partir de `openapi/swagger-apis`
-- Gerar SDK unificado em `unified-sdk/`
-- Instalar dependências e validar o resultado
+- `platform/`: Laravel 13, Inertia 3, Vue 3/TypeScript, Tailwind 4 e shadcn-vue.
+- `packages/financial-core`: contratos e DTOs financeiros independentes.
+- `packages/bank-sicredi`: adapter Sicredi OAuth2/mTLS por produto.
+- `packages/php-sdk`: cliente oficial para ERPs e verificador HMAC.
+- `docs/openapi/platform-v1.yaml`: contrato público versionado.
+- `infra/`: exemplos de edge HAProxy e PgBouncer.
 
-## Pré-requisitos
+O `unified-sdk` legado permanece isolado e não é dependência da plataforma.
 
-Tenha instalado na máquina:
+## Ambiente local
 
-- `git`
-- `node` 22 ou superior e `npm`
-- `php` e `composer`
-
-Opcional (para mocks):
-
-- `docker`
-- `docker compose`
-
-## Estrutura relevante
-
-- `generate-sdks.sh`: gera SDKs PHP individuais em `sdks/`
-- `unify-sdks.sh`: consolida os SDKs em `unified-sdk/`
-- `openapitools.json`: versão do OpenAPI Generator CLI
-- `openapi/`: especificações OpenAPI
-
-## Como gerar os arquivos
-
-A partir da raiz do workspace:
+Com Docker e Docker Compose v2 instalados, o ambiente de desenvolvimento completo sobe com um comando:
 
 ```bash
-npm ci
+./deploy/bin/dev-up.sh
 ```
 
-### 1) Gerar SDKs individuais
+O script cria `platform/.env`, gera uma `APP_KEY`, constrói as imagens, inicia os serviços, executa as migrações/seeds e valida a API. Os dados ficam em volumes Docker e são preservados ao desligar:
 
 ```bash
-npm run generate:sdks
+./deploy/bin/dev-down.sh
 ```
 
-Resultado esperado:
+Serviços locais:
 
-- diretórios por domínio em `sdks/` (ex.: `sdks/accounts`, `sdks/payments`, etc.)
+- painel: `http://localhost:8080`;
+- Mailpit: `http://localhost:8025`;
+- MinIO: `http://localhost:9001`;
+- login: `admin@openfinance.local` / `password`.
 
-### 2) Gerar SDK unificado
+O seed também cria duas contas Sicredi simuladas, com saldos, para exercitar dashboard e listagem de contas sem credenciais bancárias. A conexão permanece como `draft` para não disparar polling real. O login seed é exclusivo para desenvolvimento. No primeiro acesso, o painel exige ativação do 2FA antes de liberar operações.
+
+Para desenvolvimento sem Docker, entre em `platform/`, execute `composer install`, `npm install`, configure `.env`, migre e use `composer dev`.
+
+O perfil opcional de observabilidade sobe Prometheus, Alertmanager e Grafana:
 
 ```bash
-npm run generate:unified
+WITH_MONITORING=1 ./deploy/bin/dev-up.sh
 ```
 
-Resultado esperado:
+## Processos de produção
 
-- `unified-sdk/` com `lib/`, `docs/`, `test/`, `composer.json` e demais arquivos de suporte
+As imagens imutáveis e os stacks de staging, aplicação, workers, scheduler, edge HAProxy e observabilidade ficam em [`deploy/`](deploy/README.md). Suba ao menos duas réplicas web, um scheduler e supervisores Horizon especializados nas filas `webhooks-critical`, `bank-sync`, `normalization`, `reconciliation`, `erp-delivery` e `maintenance`.
 
-### 3) Instalar dependências dos SDKs
-
-SDK Pix (quando necessário):
+O primeiro token ERP é emitido sem persistir o texto puro:
 
 ```bash
-composer install -d pix-api-sdk-php --no-interaction
+php artisan openfinance:issue-api-client ORGANIZATION_UUID "SimplesLaravel" --company=COMPANY_UUID --scopes=erp:write --scopes=banking:read --scopes=reconciliation:write --scopes=receivables:write
 ```
 
-SDK unificado:
-
-```bash
-composer install -d unified-sdk --no-interaction
-```
-
-### 4) Validar a geração
-
-```bash
-composer validate -d unified-sdk --no-check-publish
-composer audit -d unified-sdk --locked
-```
-
-Se quiser validar o compose dos mocks:
-
-```bash
-cd mock-api
-docker compose config -q
-```
-
-## Atualizando especificações antes da geração (opcional)
-
-Para garantir que você está usando o conteúdo mais recente dos repositórios locais:
-
-```bash
-git -C openapi fetch --all --prune
-git -C mock-api fetch --all --prune
-git -C pix-api fetch --all --prune
-```
-
-> Se quiser trazer mudanças para a sua branch local, faça também `git pull` dentro de cada repositório.
-
-## Solução de problemas
-
-- Erro de `composer.json` inválido no `unified-sdk`:
-  - execute novamente `bash unify-sdks.sh` e valide com `composer validate -d unified-sdk`
-- Falha no gerador OpenAPI:
-  - execute `npm ci` e confirme internet ativa
-- Scripts sem permissão:
-  - execute com `bash generate-sdks.sh` e `bash unify-sdks.sh` (sem precisar `chmod +x`)
-
-## Comandos rápidos (resumo)
-
-```bash
-npm ci
-npm run generate:sdks
-npm run generate:unified
-composer install -d unified-sdk --no-interaction
-composer validate -d unified-sdk --no-check-publish
-composer audit -d unified-sdk --locked
-```
-
-## Próxima evolução
-
-O desenho inicial do módulo reutilizável de integrações financeiras está em
-[`docs/modulo-integracoes-financeiras.md`](docs/modulo-integracoes-financeiras.md).
+Consulte [a arquitetura](docs/architecture.md), [o OpenAPI](docs/openapi/platform-v1.yaml), [a integração SimplesLaravel](docs/simpleslaravel.md) e [o runbook de failover](docs/runbooks/failover.md).
