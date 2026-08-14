@@ -51,4 +51,10 @@ class BankConnection extends DomainModel
     {
         return $this->hasMany(BankAccount::class);
     }
+
+    /** @return HasMany<BankSandboxRun, $this> */
+    public function sandboxRuns(): HasMany
+    {
+        return $this->hasMany(BankSandboxRun::class);
+    }
 }

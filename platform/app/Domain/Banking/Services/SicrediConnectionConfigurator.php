@@ -12,10 +12,14 @@ final class SicrediConnectionConfigurator
 {
     /**
      * @param  array<string,mixed>  $data
-     * @return array{credentials:array<string,mixed>,capabilities:list<string>,certificate_expires_at:CarbonImmutable}
+     * @return array{credentials:array<string,mixed>,capabilities:list<string>,certificate_expires_at:?CarbonImmutable}
      */
     public function build(array $data): array
     {
+        if (($data['product'] ?? 'pix') === 'boleto') {
+            return $this->buildBoleto($data);
+        }
+
         $certificateFile = $data['certificate'] ?? null;
         $privateKeyFile = $data['private_key'] ?? null;
         if (! $certificateFile instanceof UploadedFile || ! $privateKeyFile instanceof UploadedFile) {
@@ -62,6 +66,11 @@ final class SicrediConnectionConfigurator
         if (! is_array($preset)) {
             throw ValidationException::withMessages(['environment' => 'Ambiente Sicredi inválido.']);
         }
+        if (empty($preset['base_url']) || empty($preset['token_url'])) {
+            throw ValidationException::withMessages([
+                'environment' => 'Configure as URLs de homologação informadas pelo Sicredi antes de salvar a conexão.',
+            ]);
+        }
 
         /** @var list<string> $capabilities */
         $capabilities = array_values(array_unique($data['capabilities']));
@@ -73,6 +82,7 @@ final class SicrediConnectionConfigurator
         return [
             'credentials' => [
                 'default_pix_key' => $data['pix_key'] ?? null,
+                'webhook_secret' => $data['webhook_secret'] ?? null,
                 'products' => [
                     'pix' => [
                         'base_url' => $preset['base_url'],
@@ -81,6 +91,14 @@ final class SicrediConnectionConfigurator
                         'client_secret' => $data['client_secret'],
                         'grant_type' => 'client_credentials',
                         'scope' => implode(' ', $this->scopeFor($capabilities)),
+                        'paths' => [
+                            'charge' => '/cob/{txid}',
+                            'due_charge' => '/cobv/{txid}',
+                            'receipts' => '/pix',
+                            'receipt' => '/pix/{endToEndId}',
+                            'refund' => '/pix/{endToEndId}/devolucao/{refundId}',
+                            'webhook' => '/webhook/{key}',
+                        ],
                         'certificate_pem' => $certificatePem."\n",
                         'private_key_pem' => trim($privateKeyPem)."\n",
                         'private_key_passphrase' => $privateKeyPassphrase,
@@ -89,6 +107,58 @@ final class SicrediConnectionConfigurator
             ],
             'capabilities' => $capabilities,
             'certificate_expires_at' => CarbonImmutable::createFromTimestampUTC((int) $certificateData['validTo_time_t']),
+        ];
+    }
+
+    /**
+     * @param  array<string,mixed>  $data
+     * @return array{credentials:array<string,mixed>,capabilities:list<string>,certificate_expires_at:null}
+     */
+    private function buildBoleto(array $data): array
+    {
+        $environment = (string) ($data['environment'] ?? '');
+        $preset = config("openfinance.sicredi.boleto.environments.{$environment}");
+        if (! is_array($preset) || empty($preset['base_url']) || empty($preset['token_url'])) {
+            throw ValidationException::withMessages([
+                'environment' => 'Ambiente da API de Cobrança Sicredi inválido.',
+            ]);
+        }
+
+        $beneficiaryCode = (string) $data['beneficiary_code'];
+        $cooperativeCode = (string) $data['cooperative_code'];
+        $branchCode = (string) $data['branch_code'];
+
+        /** @var list<string> $capabilities */
+        $capabilities = array_values(array_unique($data['capabilities']));
+
+        return [
+            'credentials' => [
+                'products' => [
+                    'boleto' => [
+                        'base_url' => $preset['base_url'],
+                        'token_url' => $preset['token_url'],
+                        'grant_type' => 'password',
+                        'username' => $beneficiaryCode.$cooperativeCode,
+                        'password' => $data['access_code'],
+                        'scope' => 'cobranca',
+                        'api_key' => $data['x_api_key'],
+                        'token_headers' => [
+                            'context' => 'COBRANCA',
+                        ],
+                        'headers' => [
+                            'cooperativa' => $cooperativeCode,
+                            'posto' => $branchCode,
+                        ],
+                        'beneficiary_code' => $beneficiaryCode,
+                        'paths' => [
+                            'boletos' => '/boletos',
+                            'cancel' => '/boletos/{nossoNumero}/baixa',
+                        ],
+                    ],
+                ],
+            ],
+            'capabilities' => $capabilities,
+            'certificate_expires_at' => null,
         ];
     }
 

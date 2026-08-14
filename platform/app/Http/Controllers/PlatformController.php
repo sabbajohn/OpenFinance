@@ -16,6 +16,7 @@ use App\Domain\ERP\Models\ErpTitle;
 use App\Domain\Events\Models\OutboxEvent;
 use App\Domain\Events\Models\RawPayload;
 use App\Domain\Events\Models\WebhookDelivery;
+use App\Domain\Identity\Enums\OrganizationPermission;
 use App\Domain\Identity\Enums\OrganizationRole;
 use App\Domain\Identity\Models\Company;
 use App\Domain\Receivables\Models\Receivable;
@@ -46,9 +47,32 @@ class PlatformController extends Controller
                 'transactions_today' => BankTransaction::query()->where('occurred_at', '>=', now('UTC')->startOfDay())->count(),
                 'open_reconciliations' => ReconciliationCase::query()->where('status', 'open')->count(),
                 'connections_attention' => BankConnection::query()->whereIn('status', ['degraded', 'action_required'])->count(),
+                'active_connections' => BankConnection::query()->where('status', 'active')->count(),
             ],
             'recentTransactions' => BankTransaction::query()->latest('occurred_at')->limit(8)->get(),
             'queueHealth' => OutboxEvent::query()->where('organization_id', $context->id())->selectRaw('status, count(*) as total')->groupBy('status')->pluck('total', 'status'),
+            'onboarding' => [
+                'company' => Company::query()->exists(),
+                'bank_connection' => BankConnection::query()->exists(),
+                'bank_authenticated' => BankConnection::query()->where('status', 'active')->exists(),
+                'erp_connection' => ErpConnection::query()->where('status', 'active')->exists(),
+                'two_factor' => request()->user()?->two_factor_confirmed_at !== null,
+            ],
+            'connectionHealth' => BankConnection::query()
+                ->with('company:id,trade_name,legal_name')
+                ->latest()
+                ->limit(4)
+                ->get()
+                ->map(fn (BankConnection $connection): array => [
+                    'id' => $connection->getKey(),
+                    'name' => $connection->name,
+                    'provider' => $connection->provider,
+                    'company_name' => $connection->company?->trade_name ?: $connection->company?->legal_name,
+                    'environment' => $connection->environment,
+                    'status' => $connection->status,
+                    'last_synced_at' => $connection->last_synced_at,
+                    'last_error' => $connection->last_error,
+                ]),
         ]);
     }
 
@@ -62,8 +86,9 @@ class PlatformController extends Controller
         ]);
     }
 
-    public function bankConnections(): Response
+    public function bankConnections(Request $request, OrganizationContext $context): Response
     {
+        $role = $request->user()->roleFor($context->get());
         $connections = BankConnection::query()
             ->with('company:id,trade_name,legal_name')
             ->withCount('accounts')
@@ -71,8 +96,22 @@ class PlatformController extends Controller
             ->get()
             ->map(function (BankConnection $connection): array {
                 $credentials = $connection->encrypted_credentials;
-                $pix = is_array($credentials) ? data_get($credentials, 'products.pix', []) : [];
                 $settings = is_array($connection->sync_settings) ? $connection->sync_settings : [];
+                $product = (string) ($settings['product'] ?? (
+                    is_array($credentials) && is_array(data_get($credentials, 'products.boleto'))
+                        ? 'boleto'
+                        : 'pix'
+                ));
+                $productCredentials = is_array($credentials)
+                    ? data_get($credentials, 'products.'.$product, [])
+                    : [];
+                $usesSicrediBilling = $connection->provider === 'sicredi' && $product === 'boleto';
+                $configured = is_array($productCredentials) && ($usesSicrediBilling
+                    ? ! empty($productCredentials['api_key']) && ! empty($productCredentials['username']) && ! empty($productCredentials['password'])
+                    : ! empty($productCredentials['client_id']) && ! empty($productCredentials['certificate_pem']));
+                $credential = $usesSicrediBilling
+                    ? ($productCredentials['api_key'] ?? null)
+                    : ($productCredentials['client_id'] ?? null);
 
                 return [
                     'id' => $connection->getKey(),
@@ -80,6 +119,7 @@ class PlatformController extends Controller
                     'company_name' => $connection->company?->trade_name ?: $connection->company?->legal_name,
                     'name' => $connection->name,
                     'provider' => $connection->provider,
+                    'product' => $product,
                     'environment' => $connection->environment,
                     'status' => $connection->status,
                     'capabilities' => $connection->capabilities,
@@ -89,49 +129,104 @@ class PlatformController extends Controller
                     'last_error' => $connection->last_error,
                     'last_test_at' => $settings['last_connection_test_at'] ?? null,
                     'last_test' => $settings['last_connection_test'] ?? null,
-                    'configured' => is_array($pix) && ! empty($pix['client_id']) && ! empty($pix['certificate_pem']),
-                    'client_id_hint' => is_array($pix) && ! empty($pix['client_id'])
-                        ? '••••'.substr((string) $pix['client_id'], -6)
+                    'configured' => $configured,
+                    'credential_hint' => is_string($credential) && $credential !== ''
+                        ? '••••'.substr($credential, -6)
                         : null,
-                    'scope' => is_array($pix) ? ($pix['scope'] ?? null) : null,
+                    'scope' => is_array($productCredentials) ? ($productCredentials['scope'] ?? null) : null,
                     'webhook_url' => in_array(Capability::Webhooks->value, $connection->capabilities ?? [], true)
                         ? route('bank-webhooks.pix.receive', ['bankConnection' => $connection])
                         : null,
-                    'can_sync' => in_array(Capability::Accounts->value, $connection->capabilities ?? [], true),
+                    'can_sync' => in_array(Capability::Accounts->value, $connection->capabilities ?? [], true)
+                        || in_array(Capability::PixRefund->value, $connection->capabilities ?? [], true),
                 ];
             });
 
         return Inertia::render('Platform/BankConnections', [
+            'access' => [
+                'manage' => $role?->allows(OrganizationPermission::ManageBankConnections) ?? false,
+                'test' => $role?->allows(OrganizationPermission::RunBankTests) ?? false,
+                'sync' => $role?->allows(OrganizationPermission::RunBankSync) ?? false,
+            ],
             'connections' => $connections,
             'companies' => Company::query()->select('id', 'trade_name', 'legal_name')->orderBy('trade_name')->get(),
             'providers' => [
                 [
                     'value' => 'sicredi',
                     'label' => 'Sicredi',
-                    'default_name' => 'Sicredi Pix',
                     'portal_url' => 'https://developer.sicredi.com.br',
-                    'capabilities' => [
-                        Capability::PixImmediate->value,
-                        Capability::PixDue->value,
-                        Capability::PixRefund->value,
-                        Capability::Webhooks->value,
+                    'products' => [
+                        [
+                            'value' => 'boleto',
+                            'label' => 'Cobrança',
+                            'default_name' => 'Sicredi Cobrança',
+                            'documentation_url' => 'https://developers.sicredi.com.br/public/docs/getting-started-billing',
+                            'contract' => 'API Cobrança Sicredi',
+                            'auth_mode' => 'oauth_password',
+                            'capabilities' => [
+                                Capability::BoletoNormal->value,
+                                Capability::BoletoHybrid->value,
+                            ],
+                        ],
+                        [
+                            'value' => 'pix',
+                            'label' => 'Pix',
+                            'default_name' => 'Sicredi Pix',
+                            'documentation_url' => 'https://developers.sicredi.com.br/public/docs/getting-started-pix',
+                            'contract' => 'API Pix Sicredi v2.9.0',
+                            'auth_mode' => 'mtls_client_credentials',
+                            'capabilities' => [
+                                Capability::PixImmediate->value,
+                                Capability::PixDue->value,
+                                Capability::PixRefund->value,
+                                Capability::Webhooks->value,
+                            ],
+                        ],
                     ],
                 ],
                 [
                     'value' => 'bradesco',
                     'label' => 'Bradesco',
-                    'default_name' => 'Bradesco Pix',
                     'portal_url' => 'https://developers.bradesco.com.br',
-                    'capabilities' => [
-                        Capability::PixImmediate->value,
-                        Capability::PixRefund->value,
-                        Capability::Webhooks->value,
+                    'products' => [
+                        [
+                            'value' => 'boleto',
+                            'label' => 'Cobrança',
+                            'default_name' => 'Bradesco Cobrança',
+                            'documentation_url' => 'https://api.bradesco/openapis',
+                            'contract' => 'Cobrança v1.7.2 e Cobrança com QR Code v1.8.3',
+                            'auth_mode' => 'mtls_client_credentials',
+                            'capabilities' => [
+                                Capability::BoletoNormal->value,
+                                Capability::BoletoHybrid->value,
+                            ],
+                        ],
+                        [
+                            'value' => 'pix',
+                            'label' => 'Pix',
+                            'default_name' => 'Bradesco Pix',
+                            'documentation_url' => 'https://developers.bradesco.com.br/productDetails/8a2e88539549335b01954e36ab14699b/version/87757755b0f34076add6c7b9e72f9399/docs',
+                            'contract' => 'Pix - geração de QR Code v1.2.3',
+                            'auth_mode' => 'mtls_client_credentials',
+                            'capabilities' => [
+                                Capability::PixImmediate->value,
+                                Capability::PixDue->value,
+                                Capability::PixRefund->value,
+                                Capability::Webhooks->value,
+                            ],
+                        ],
                     ],
                 ],
             ],
             'presets' => [
-                'sicredi' => config('openfinance.sicredi.pix.environments'),
-                'bradesco' => config('openfinance.bradesco.pix.environments'),
+                'sicredi' => [
+                    'boleto' => config('openfinance.sicredi.boleto.environments'),
+                    'pix' => config('openfinance.sicredi.pix.environments'),
+                ],
+                'bradesco' => [
+                    'boleto' => config('openfinance.bradesco.boleto.environments'),
+                    'pix' => config('openfinance.bradesco.pix.environments'),
+                ],
             ],
         ]);
     }
@@ -149,13 +244,18 @@ class PlatformController extends Controller
 
     public function transactions(): Response
     {
-        return $this->page('Transações bancárias', 'transactions', BankTransaction::query()->latest('occurred_at')->limit(500)->get(), [
-            ['key' => 'occurred_at', 'label' => 'Data'],
-            ['key' => 'description', 'label' => 'Descrição'],
-            ['key' => 'direction', 'label' => 'Direção'],
-            ['key' => 'amount_minor', 'label' => 'Valor', 'format' => 'money'],
-            ['key' => 'status', 'label' => 'Status'],
-        ]);
+        return $this->page('Transações bancárias', 'transactions', BankTransaction::query()
+            ->with('connection:id,name,provider')
+            ->latest('occurred_at')
+            ->limit(500)
+            ->get(), [
+                ['key' => 'connection.name', 'label' => 'Conexão'],
+                ['key' => 'occurred_at', 'label' => 'Data'],
+                ['key' => 'description', 'label' => 'Descrição'],
+                ['key' => 'identifiers.txid', 'label' => 'TXID'],
+                ['key' => 'amount_minor', 'label' => 'Valor', 'format' => 'money'],
+                ['key' => 'status', 'label' => 'Status'],
+            ]);
     }
 
     public function reconciliations(): Response
@@ -182,7 +282,13 @@ class PlatformController extends Controller
             ['key' => 'due_at', 'label' => 'Vencimento'],
             ['key' => 'status', 'label' => 'Status'],
         ], [
-            'connections' => BankConnection::query()->where('status', 'active')->get(['id', 'company_id', 'name']),
+            'connections' => BankConnection::query()->where('status', 'active')->get([
+                'id',
+                'company_id',
+                'name',
+                'provider',
+                'capabilities',
+            ]),
             'titles' => ErpTitle::query()->whereIn('type', ['receivable', 'receive'])->where('status', 'open')
                 ->get(['id', 'company_id', 'external_id', 'description', 'open_amount_minor', 'currency']),
         ]);
@@ -253,10 +359,11 @@ class PlatformController extends Controller
     ): RedirectResponse {
         $this->assertAdministrator($request, $context);
         $data = $this->validateBankConnection($request);
-        abort_unless(Company::query()->whereKey($data['company_id'])->exists(), 422);
+        $company = Company::query()->whereKey($data['company_id'])->firstOrFail();
+        $configurationData = [...$data, 'beneficiary_tax_id' => $company->tax_id];
         $configuration = match ($data['provider']) {
-            'sicredi' => $sicrediConfigurator->build($data),
-            'bradesco' => $bradescoConfigurator->build($data),
+            'sicredi' => $sicrediConfigurator->build($configurationData),
+            'bradesco' => $bradescoConfigurator->build($configurationData),
             default => abort(422, 'Banco não suportado.'),
         };
         BankConnection::query()->create([
@@ -268,7 +375,11 @@ class PlatformController extends Controller
             'capabilities' => $configuration['capabilities'],
             'encrypted_credentials' => $configuration['credentials'],
             'certificate_expires_at' => $configuration['certificate_expires_at'],
-            'sync_settings' => ['source' => $data['provider'].'_pix', 'last_connection_test' => ['status' => 'pending']],
+            'sync_settings' => [
+                'source' => $data['provider'].'_'.$data['product'],
+                'product' => $data['product'],
+                'last_connection_test' => ['status' => 'pending'],
+            ],
         ]);
 
         Inertia::flash('toast', ['type' => 'success', 'message' => 'Conexão salva como rascunho. Agora teste a autenticação com o '.$this->providerLabel($data['provider']).'.']);
@@ -286,10 +397,11 @@ class PlatformController extends Controller
         $this->assertAdministrator($request, $context);
         abort_unless($bankConnection->organization_id === $context->id(), 403);
         $data = $this->validateBankConnection($request, $bankConnection->provider);
-        abort_unless(Company::query()->whereKey($data['company_id'])->exists(), 422);
+        $company = Company::query()->whereKey($data['company_id'])->firstOrFail();
+        $configurationData = [...$data, 'beneficiary_tax_id' => $company->tax_id];
         $configuration = match ($data['provider']) {
-            'sicredi' => $sicrediConfigurator->build($data),
-            'bradesco' => $bradescoConfigurator->build($data),
+            'sicredi' => $sicrediConfigurator->build($configurationData),
+            'bradesco' => $bradescoConfigurator->build($configurationData),
             default => abort(422, 'Banco não suportado.'),
         };
         $bankConnection->forceFill([
@@ -301,7 +413,11 @@ class PlatformController extends Controller
             'encrypted_credentials' => $configuration['credentials'],
             'certificate_expires_at' => $configuration['certificate_expires_at'],
             'last_error' => null,
-            'sync_settings' => ['source' => $data['provider'].'_pix', 'last_connection_test' => ['status' => 'pending']],
+            'sync_settings' => [
+                'source' => $data['provider'].'_'.$data['product'],
+                'product' => $data['product'],
+                'last_connection_test' => ['status' => 'pending'],
+            ],
             'version' => $bankConnection->version + 1,
         ])->save();
 
@@ -318,7 +434,7 @@ class PlatformController extends Controller
         SicrediHttpClient $sicredi,
         BradescoHttpClient $bradesco,
     ): RedirectResponse {
-        $this->assertAdministrator($request, $context);
+        $this->assertPermission($request, $context, OrganizationPermission::RunBankTests);
         abort_unless($bankConnection->organization_id === $context->id(), 403);
 
         try {
@@ -327,11 +443,12 @@ class PlatformController extends Controller
                 'bradesco' => $bradesco,
                 default => abort(422, 'Banco não suportado.'),
             };
+            $settings = is_array($bankConnection->sync_settings) ? $bankConnection->sync_settings : [];
+            $product = (string) ($settings['product'] ?? 'pix');
             $result = $contexts->with(
                 $bankConnection,
-                fn ($connectionContext): array => $client->testAuthentication($connectionContext, 'pix'),
+                fn ($connectionContext): array => $client->testAuthentication($connectionContext, $product),
             );
-            $settings = is_array($bankConnection->sync_settings) ? $bankConnection->sync_settings : [];
             $bankConnection->forceFill([
                 'status' => 'active',
                 'last_error' => null,
@@ -341,7 +458,10 @@ class PlatformController extends Controller
                     'last_connection_test' => ['status' => 'passed', ...$result],
                 ],
             ])->save();
-            Inertia::flash('toast', ['type' => 'success', 'message' => 'mTLS e OAuth2 validados com sucesso no '.$this->providerLabel($bankConnection->provider).'.']);
+            $authentication = $bankConnection->provider === 'sicredi' && $product === 'boleto'
+                ? 'OAuth2 e x-api-key validados'
+                : 'mTLS e OAuth2 validados';
+            Inertia::flash('toast', ['type' => 'success', 'message' => $authentication.' com sucesso no '.$this->providerLabel($bankConnection->provider).'.']);
         } catch (Throwable $exception) {
             $providerError = $this->providerError($exception);
             $message = $providerError['message'];
@@ -431,7 +551,12 @@ class PlatformController extends Controller
     {
         abort_unless($bankConnection->organization_id === $request->user()->current_organization_id, 403);
         $this->assertOperator($request);
-        abort_unless(in_array(Capability::Accounts->value, $bankConnection->capabilities ?? [], true), 422, 'Esta conexão não oferece sincronização de contas e extrato.');
+        abort_unless(
+            in_array(Capability::Accounts->value, $bankConnection->capabilities ?? [], true)
+                || in_array(Capability::PixRefund->value, $bankConnection->capabilities ?? [], true),
+            422,
+            'Esta conexão não oferece sincronização de extrato ou Pix recebidos.',
+        );
         SyncBankConnection::dispatch((string) $bankConnection->getKey());
 
         return back()->with('success', 'Sincronização adicionada à fila.');
@@ -464,42 +589,73 @@ class PlatformController extends Controller
         abort_unless(in_array($request->user()->roleFor($context->get()), [OrganizationRole::Owner, OrganizationRole::Admin], true), 403);
     }
 
+    private function assertPermission(
+        Request $request,
+        OrganizationContext $context,
+        OrganizationPermission $permission,
+    ): void {
+        abort_unless($request->user()->roleFor($context->get())?->allows($permission), 403);
+    }
+
     /** @return array<string,mixed> */
     private function validateBankConnection(Request $request, ?string $expectedProvider = null): array
     {
-        $request->mergeIfMissing(['provider' => $expectedProvider ?? 'sicredi']);
+        $request->mergeIfMissing([
+            'provider' => $expectedProvider ?? 'sicredi',
+            'product' => 'pix',
+        ]);
         $provider = (string) $request->input('provider');
-        $allowedCapabilities = match ($provider) {
-            'sicredi' => [
+        $product = (string) $request->input('product');
+        $allowedProducts = match ($provider) {
+            'sicredi' => ['boleto', 'pix'],
+            'bradesco' => ['boleto', 'pix'],
+            default => [],
+        };
+        $allowedCapabilities = match ([$provider, $product]) {
+            ['sicredi', 'boleto'] => [
+                Capability::BoletoNormal->value,
+                Capability::BoletoHybrid->value,
+            ],
+            ['bradesco', 'boleto'] => [
+                Capability::BoletoNormal->value,
+                Capability::BoletoHybrid->value,
+            ],
+            ['sicredi', 'pix'], ['bradesco', 'pix'] => [
                 Capability::PixImmediate->value,
                 Capability::PixDue->value,
                 Capability::PixRefund->value,
                 Capability::Webhooks->value,
             ],
-            'bradesco' => [
-                Capability::PixImmediate->value,
-                Capability::PixRefund->value,
-                Capability::Webhooks->value,
-            ],
             default => [],
         };
+        $usesMtls = $product === 'pix' || $provider === 'bradesco';
+        $usesSicrediBilling = $provider === 'sicredi' && $product === 'boleto';
+        $usesBradescoBilling = $provider === 'bradesco' && $product === 'boleto';
 
         return $request->validate([
             'provider' => ['required', Rule::in($expectedProvider ? [$expectedProvider] : ['sicredi', 'bradesco'])],
+            'product' => ['required', Rule::in($allowedProducts)],
             'company_id' => ['required', 'uuid'],
             'name' => ['required', 'string', 'max:255'],
             'environment' => ['required', Rule::in(['sandbox', 'production'])],
             'capabilities' => ['required', 'array', 'min:1'],
             'capabilities.*' => ['required', Rule::in($allowedCapabilities)],
-            'client_id' => ['required', 'string', 'max:1000'],
-            'client_secret' => ['required', 'string', 'max:2000'],
+            'client_id' => [Rule::requiredIf($usesMtls), 'nullable', 'string', 'max:1000'],
+            'client_secret' => [Rule::requiredIf($usesMtls), 'nullable', 'string', 'max:2000'],
             'pix_key' => ['nullable', 'string', 'max:100'],
-            'certificate' => ['required', 'file', 'max:512'],
+            'x_api_key' => [Rule::requiredIf($usesSicrediBilling), 'nullable', 'string', 'max:2000'],
+            'beneficiary_code' => [Rule::requiredIf($usesSicrediBilling), 'nullable', 'regex:/^\d{5}$/'],
+            'cooperative_code' => [Rule::requiredIf($usesSicrediBilling), 'nullable', 'regex:/^\d{4}$/'],
+            'branch_code' => [Rule::requiredIf($usesSicrediBilling), 'nullable', 'regex:/^\d{2}$/'],
+            'access_code' => [Rule::requiredIf($usesSicrediBilling), 'nullable', 'string', 'max:2000'],
+            'wallet_code' => [Rule::requiredIf($usesBradescoBilling), 'nullable', 'regex:/^\d{1,2}$/'],
+            'negotiation_number' => [Rule::requiredIf($usesBradescoBilling), 'nullable', 'regex:/^\d{18}$/'],
+            'certificate' => [Rule::requiredIf($usesMtls), 'nullable', 'file', 'max:512'],
             'certificate_chain' => ['nullable', 'file', 'max:512'],
-            'private_key' => ['required', 'file', 'max:512'],
+            'private_key' => [Rule::requiredIf($usesMtls), 'nullable', 'file', 'max:512'],
             'private_key_passphrase' => ['nullable', 'string', 'max:1000'],
             'webhook_secret' => [
-                Rule::requiredIf($provider === 'bradesco' && in_array(Capability::Webhooks->value, (array) $request->input('capabilities'), true)),
+                Rule::requiredIf($usesMtls && in_array(Capability::Webhooks->value, (array) $request->input('capabilities'), true)),
                 'nullable',
                 'string',
                 'min:24',
@@ -538,19 +694,53 @@ class PlatformController extends Controller
     private function storeReceivable(Request $request, ReceivableService $service, string $kind): RedirectResponse
     {
         $this->assertOperator($request);
+        $requiresPayer = $kind === 'boleto' || $request->input('subtype') === 'due';
+        $requiresAddress = $kind === 'boleto';
         $data = $request->validate([
             'erp_title_id' => ['required', 'uuid'],
             'bank_connection_id' => ['required', 'uuid'],
             'amount_minor' => ['nullable', 'integer', 'min:1'],
             'subtype' => ['required', 'in:immediate,due,normal,hybrid'],
-            'due_at' => ['nullable', 'date'],
+            'due_at' => ['nullable', 'date', Rule::requiredIf($request->input('subtype') === 'due')],
             'reference' => ['nullable', 'string', 'max:255'],
-            'payer' => ['sometimes', 'array'],
+            'payer' => [Rule::requiredIf($requiresPayer), 'array'],
+            'payer.nome' => [Rule::requiredIf($requiresPayer), 'nullable', 'string', 'max:200'],
+            'payer.cpf' => [
+                Rule::requiredIf($requiresPayer && ! $request->filled('payer.cnpj')),
+                'nullable',
+                'digits:11',
+            ],
+            'payer.cnpj' => [
+                Rule::requiredIf($requiresPayer && ! $request->filled('payer.cpf')),
+                'nullable',
+                'digits:14',
+            ],
+            'payer.endereco' => [Rule::requiredIf($requiresAddress), 'nullable', 'string', 'max:200'],
+            'payer.numero' => [Rule::requiredIf($requiresAddress), 'nullable', 'string', 'max:20'],
+            'payer.complemento' => ['nullable', 'string', 'max:100'],
+            'payer.bairro' => [Rule::requiredIf($requiresAddress), 'nullable', 'string', 'max:100'],
+            'payer.cidade' => [Rule::requiredIf($requiresAddress), 'nullable', 'string', 'max:100'],
+            'payer.uf' => [Rule::requiredIf($requiresAddress), 'nullable', 'string', 'size:2'],
+            'payer.cep' => [Rule::requiredIf($requiresAddress), 'nullable', 'digits:8'],
+            'payer.email' => ['nullable', 'email', 'max:200'],
             'options' => ['sometimes', 'array'],
             'idempotency_key' => ['required', 'uuid'],
         ]);
         $title = ErpTitle::query()->whereKey($data['erp_title_id'])->firstOrFail();
+        abort_if($kind === 'boleto' && empty($data['due_at']) && $title->due_at === null, 422, 'O boleto exige uma data de vencimento.');
         $connection = BankConnection::query()->whereKey($data['bank_connection_id'])->firstOrFail();
+        $requiredCapability = match ([$kind, $data['subtype']]) {
+            ['pix', 'immediate'] => Capability::PixImmediate->value,
+            ['pix', 'due'] => Capability::PixDue->value,
+            ['boleto', 'normal'] => Capability::BoletoNormal->value,
+            ['boleto', 'hybrid'] => Capability::BoletoHybrid->value,
+            default => null,
+        };
+        abort_unless(
+            $requiredCapability !== null && in_array($requiredCapability, $connection->capabilities ?? [], true),
+            422,
+            'A conexão selecionada não oferece esta modalidade de cobrança.',
+        );
         $service->create($kind, $title, $connection, $data['idempotency_key'], $data);
 
         return back()->with('success', 'Cobrança adicionada à fila bancária.');

@@ -1,0 +1,25 @@
+{
+    "parametros": {
+        "inicio": "2026-08-01T00:00:00.000+00:00",
+        "fim": "2026-08-12T23:59:59.000+00:00",
+        "paginacao": {
+            "paginaAtual": 0,
+            "itensPorPagina": 100,
+            "quantidadeDePaginas": 2,
+            "quantidadeTotalDeItens": 2
+        }
+    },
+    "pix": [
+        {
+            "endToEndId": "E74820260812000000000000001",
+            "txid": "1524069360e472ac7e91b11f7ee72d1c",
+            "valor": "12.34",
+            "horario": "2026-08-12T15:25:59.411Z",
+            "infoPagador": "Título ERP",
+            "pagador": {
+                "nome": "Cliente Fixture",
+                "cnpj": "12345678000190"
+            }
+        }
+    ]
+}

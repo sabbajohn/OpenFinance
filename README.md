@@ -7,7 +7,7 @@ Hub bancário SaaS multiempresa para integrar bancos e ERPs com processamento du
 - `platform/`: Laravel 13, Inertia 3, Vue 3/TypeScript, Tailwind 4 e shadcn-vue.
 - `packages/financial-core`: contratos e DTOs financeiros independentes.
 - `packages/bank-sicredi`: adapter Sicredi OAuth2/mTLS por produto.
-- `packages/bank-bradesco`: adapter Bradesco Pix OAuth2/mTLS.
+- `packages/bank-bradesco`: adapter Bradesco Pix e Cobrança OAuth2/mTLS.
 - `packages/php-sdk`: cliente oficial para ERPs e verificador HMAC.
 - `docs/openapi/platform-v1.yaml`: contrato público versionado.
 - `infra/`: exemplos de edge HAProxy e PgBouncer.
@@ -37,13 +37,17 @@ Serviços locais:
 
 O seed também cria duas contas Sicredi simuladas, com saldos, para exercitar dashboard e listagem de contas sem credenciais bancárias. A conexão permanece como `draft` para não disparar polling real. O login seed é exclusivo para desenvolvimento. No primeiro acesso, o painel exige ativação do 2FA antes de liberar operações.
 
-### Teste da API Pix Sicredi
+### Teste das APIs Sicredi
 
-Em **Conexões bancárias**, crie uma conexão Sicredi em Homologação e informe o Client ID, Client secret, certificado da aplicação, cadeia completa e chave privada emitidos para a adesão. O painel valida localmente o certificado e a correspondência com a chave; em seguida, **Testar autenticação** executa apenas o handshake mTLS e a emissão do token OAuth2, sem criar cobranças.
+Em **Conexões bancárias**, escolha Cobrança para boleto normal/híbrido ou Pix. A Cobrança usa OAuth2 Password, `x-api-key` e os códigos do beneficiário; Pix usa Client ID, Client secret e certificado mTLS. **Testar autenticação** valida apenas as credenciais, sem criar cobranças.
 
 Os endpoints iniciais ficam em `platform/.env` e podem ser ajustados para a versão liberada na adesão:
 
 ```dotenv
+SICREDI_BOLETO_SANDBOX_BASE_URL=https://api-parceiro.sicredi.com.br/sb/cobranca/boleto/v1/
+SICREDI_BOLETO_SANDBOX_TOKEN_URL=https://api-parceiro.sicredi.com.br/sb/auth/openapi/token
+SICREDI_BOLETO_PRODUCTION_BASE_URL=https://api-parceiro.sicredi.com.br/cobranca/boleto/v1/
+SICREDI_BOLETO_PRODUCTION_TOKEN_URL=https://api-parceiro.sicredi.com.br/auth/openapi/token
 SICREDI_PIX_HOMOLOGATION_BASE_URL=https://api-pix-h.sicredi.com.br/api/v2/
 SICREDI_PIX_HOMOLOGATION_TOKEN_URL=https://api-pix-h.sicredi.com.br/oauth/token
 SICREDI_PIX_PRODUCTION_BASE_URL=https://api-pix.sicredi.com.br/api/v2/
@@ -52,15 +56,19 @@ SICREDI_PIX_PRODUCTION_TOKEN_URL=https://api-pix.sicredi.com.br/oauth/token
 
 As credenciais e os arquivos PEM são criptografados com a `APP_KEY`, materializados com permissão `0600` somente durante a chamada e apagados ao final. Consulte o [Portal do Desenvolvedor Sicredi](https://developer.sicredi.com.br) para adesão, certificados e escopos habilitados.
 
-### Teste da API Pix Bradesco
+### Teste das APIs Bradesco
 
-Na mesma tela de **Conexões bancárias**, selecione Bradesco e informe as credenciais e o certificado associados à aplicação criada no [Portal Bradesco Developers](https://developers.bradesco.com.br). O recorte implementado cobre cobrança Pix imediata, consulta e devolução. Pix com vencimento, saldo/extrato e boleto só devem ser habilitados depois da assinatura dos respectivos produtos e da validação dos contratos disponibilizados no portal.
+Na mesma tela de **Conexões bancárias**, selecione Bradesco e informe as credenciais e o certificado associados à aplicação criada no [Portal Bradesco Developers](https://developers.bradesco.com.br). O recorte implementado cobre Pix e os produtos **Cobrança v1.7.2** (boleto normal) e **Cobrança com QR Code v1.8.3** (boleto híbrido). Cada produto deve ser habilitado somente após a assinatura do contrato correspondente no banco. Saldos e extratos permanecem como a próxima etapa.
 
 Os endpoints públicos iniciais podem ser substituídos pelas URLs entregues no onboarding:
 
 ```dotenv
-BRADESCO_PIX_HOMOLOGATION_BASE_URL=https://qrpix-h.bradesco.com.br/
-BRADESCO_PIX_HOMOLOGATION_TOKEN_URL=https://qrpix-h.bradesco.com.br/auth/server/oauth/token
+BRADESCO_BOLETO_HOMOLOGATION_BASE_URL=https://openapisandbox.prebanco.com.br/
+BRADESCO_BOLETO_HOMOLOGATION_TOKEN_URL=https://openapisandbox.prebanco.com.br/auth/server-mtls/v2/token
+BRADESCO_BOLETO_PRODUCTION_BASE_URL=https://openapi.bradesco.com.br/
+BRADESCO_BOLETO_PRODUCTION_TOKEN_URL=https://openapi.bradesco.com.br/auth/server-mtls/v2/token
+BRADESCO_PIX_HOMOLOGATION_BASE_URL=https://openapisandbox.prebanco.com.br/
+BRADESCO_PIX_HOMOLOGATION_TOKEN_URL=https://openapisandbox.prebanco.com.br/auth/server/oauth/token
 BRADESCO_PIX_PRODUCTION_BASE_URL=https://qrpix.bradesco.com.br/
 BRADESCO_PIX_PRODUCTION_TOKEN_URL=https://qrpix.bradesco.com.br/auth/server/oauth/token
 ```

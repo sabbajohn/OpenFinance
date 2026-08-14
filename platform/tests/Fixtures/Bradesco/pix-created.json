@@ -5,10 +5,11 @@
         "expiracao": 3600
     },
     "location": "qrpix-h.bradesco.com.br/fixture-location",
-    "txid": "ERP123",
+    "txid": "ERP12345678901234567890123",
     "revisao": 0,
     "valor": {
-        "original": "12.34"
+        "original": "12.34",
+        "modalidadeAlteracao": 0
     },
     "chave": "financeiro@example.test",
     "pixCopiaECola": "000201010212bradescofixture"

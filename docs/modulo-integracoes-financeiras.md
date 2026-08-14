@@ -9,11 +9,11 @@ iniciadores e provedores de pagamento, normalizando eventos financeiros antes de
 ao domínio de cada aplicação. O primeiro consumidor será o SimplesLaravel; o desenho também
 deve servir a outros projetos sem dependência obrigatória de Laravel ou Eloquent.
 
-O primeiro recorte cobre:
+O recorte funcional cobre, na ordem atual de entrega:
 
-- importação automática de extratos e saldos;
+- emissão, consulta, alteração, baixa e liquidação de boletos;
 - recebimentos e pagamentos por Pix;
-- liquidação e retorno de boletos;
+- futuramente, importação automática de saldos e extratos;
 - transferências bancárias identificadas no extrato;
 - webhooks, polling de contingência e reprocessamento;
 - dados normalizados para sugestão e confirmação de conciliação.
@@ -240,15 +240,14 @@ Mapeamento inicial:
 
 Saída: ADR aprovado, contrato canônico versionado e uma matriz provedor x capacidade.
 
-### Fase 1 — extrato para conciliação
+### Fase 1 — boletos
 
-- criar o núcleo e o adaptador de dados de contas;
-- sincronizar contas, saldos e transações com cursor;
-- integrar a entrada normalizada ao SimplesLaravel;
-- operar inicialmente em modo de sugestão, sem baixa automática;
-- adicionar replay, observabilidade e testes de duplicidade.
+- habilitar boleto normal e híbrido nos adaptadores Sicredi e Bradesco;
+- adicionar emissão, consulta, alteração e cancelamento conforme cada contrato bancário;
+- normalizar nosso número, linha digitável, código de barras, QR Code, status e data de crédito;
+- manter payloads próprios por banco com fixtures e testes de contrato.
 
-Saída: Pix e transferências do extrato entram automaticamente como itens conciliáveis.
+Saída: ciclo de vida do boleto disponível nas duas integrações, com rastreabilidade e idempotência.
 
 ### Fase 2 — recebimentos Pix
 
@@ -259,14 +258,16 @@ Saída: Pix e transferências do extrato entram automaticamente como itens conci
 
 Saída: cobrança, confirmação e conciliação Pix auditáveis de ponta a ponta.
 
-### Fase 3 — boletos
+### Fase 3 — saldos e extratos
 
-- começar por retorno CNAB/API e reaproveitar a baixa existente;
-- adicionar emissão, alteração e cancelamento apenas após escolher o banco/provedor;
-- normalizar nosso número, documento, ocorrência, tarifa, juros e data de crédito;
-- manter adapters por banco/layout com fixtures de contrato.
+- contratar e validar os produtos de saldos e extratos de cada banco;
+- criar ou completar os adaptadores de dados de contas;
+- sincronizar contas, saldos e transações com cursor;
+- integrar a entrada normalizada ao SimplesLaravel;
+- operar inicialmente em modo de sugestão, sem baixa automática;
+- adicionar replay, observabilidade e testes de duplicidade.
 
-Saída: retorno automático e, na segunda etapa, ciclo de vida do boleto.
+Saída: Pix, boletos e transferências do extrato entram automaticamente como itens conciliáveis.
 
 ### Fase 4 — pagamentos e transferências de saída
 

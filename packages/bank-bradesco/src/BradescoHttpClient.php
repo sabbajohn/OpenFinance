@@ -90,9 +90,10 @@ final readonly class BradescoHttpClient
 
         try {
             $response = $client->post((string) $config['token_url'], [
-                'auth' => [(string) $config['client_id'], (string) $config['client_secret']],
                 'form_params' => array_filter([
                     'grant_type' => $config['grant_type'] ?? 'client_credentials',
+                    'client_id' => $config['client_id'],
+                    'client_secret' => $config['client_secret'],
                     'scope' => $config['scope'] ?? null,
                 ], fn (mixed $value): bool => $value !== null && $value !== ''),
                 'headers' => ['Accept' => 'application/json'],

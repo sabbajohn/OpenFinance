@@ -1,0 +1,26 @@
+{
+    "parametros": {
+        "inicio": "2026-08-13T00:00:00.000Z",
+        "fim": "2026-08-14T23:59:59.000Z",
+        "paginacao": {
+            "paginaAtual": 0,
+            "itensPorPagina": 1,
+            "quantidadeDePaginas": 2,
+            "quantidadeTotalDeItens": 2
+        }
+    },
+    "pix": [
+        {
+            "endToEndId": "E237202608140000000000000000003",
+            "txid": "ERP12345678901234567890123",
+            "valor": "12.34",
+            "chave": "financeiro@example.test",
+            "horario": "2026-08-14T16:01:00.123Z",
+            "infoPagador": "Pagamento do pedido ERP123",
+            "pagador": {
+                "nome": "Cliente Pagador",
+                "cnpj": "12345678000190"
+            }
+        }
+    ]
+}

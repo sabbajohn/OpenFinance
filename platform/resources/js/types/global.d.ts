@@ -18,6 +18,13 @@ declare module '@inertiajs/core' {
         sharedPageProps: {
             name: string;
             auth: Auth;
+            organization?: {
+                id: string;
+                name: string;
+                role: string;
+                role_label: string;
+                permissions: string[];
+            } | null;
             sidebarOpen: boolean;
             [key: string]: unknown;
         };

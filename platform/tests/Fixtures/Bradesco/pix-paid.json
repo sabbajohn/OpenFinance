@@ -1,13 +1,15 @@
 {
     "status": "CONCLUIDA",
-    "txid": "ERP123",
-    "valor": {
-        "original": "12.34"
-    },
+    "txid": "ERP12345678901234567890123",
+    "valor": [
+        {
+            "original": "12.34"
+        }
+    ],
     "pix": [
         {
             "endToEndId": "E237202608130000000000000000001",
-            "txid": "ERP123",
+            "txid": "ERP12345678901234567890123",
             "valor": "12.34",
             "horario": "2026-08-13T12:01:00Z"
         }

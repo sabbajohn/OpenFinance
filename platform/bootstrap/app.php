@@ -7,6 +7,7 @@ use App\Http\Middleware\HandleInertiaRequests;
 use App\Http\Middleware\IdentifyOrganization;
 use App\Http\Middleware\RequireApiScope;
 use App\Http\Middleware\RequireIdempotencyKey;
+use App\Http\Middleware\RequireOrganizationPermission;
 use App\Http\Middleware\RequireTwoFactorForSensitiveRole;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -42,6 +43,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'api.client' => AuthenticateApiClient::class,
             'api.scope' => RequireApiScope::class,
             'organization' => IdentifyOrganization::class,
+            'organization.permission' => RequireOrganizationPermission::class,
             'sensitive.2fa' => RequireTwoFactorForSensitiveRole::class,
             'idempotency' => RequireIdempotencyKey::class,
             'audit' => AuditRequest::class,

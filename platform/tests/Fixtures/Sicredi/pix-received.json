@@ -1,0 +1,11 @@
+{
+    "endToEndId": "E74820260812000000000000001",
+    "txid": "1524069360e472ac7e91b11f7ee72d1c",
+    "valor": "12.34",
+    "horario": "2026-08-12T15:25:59.411Z",
+    "infoPagador": "Título ERP",
+    "pagador": {
+        "nome": "Cliente Fixture",
+        "cnpj": "12345678000190"
+    }
+}

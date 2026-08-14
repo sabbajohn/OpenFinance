@@ -11,7 +11,7 @@ interface PixReceivablesProvider
 {
     public function createPix(ConnectionContext $context, ReceivableCommand $command): ReceivableResult;
 
-    public function getPix(ConnectionContext $context, string $externalId): ReceivableResult;
+    public function getPix(ConnectionContext $context, string $externalId, ?string $subtype = null): ReceivableResult;
 
     public function refundPix(ConnectionContext $context, string $externalId, string $refundId, Money $amount): ReceivableResult;
 }

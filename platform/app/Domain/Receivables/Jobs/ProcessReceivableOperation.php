@@ -137,8 +137,16 @@ class ProcessReceivableOperation implements ShouldQueue
 
         return match ($operation->action) {
             'refresh' => match (true) {
-                $receivable->kind === 'pix' && $provider instanceof PixReceivablesProvider => $provider->getPix($context, $externalId),
-                $receivable->kind === 'boleto' && $provider instanceof BoletoReceivablesProvider => $provider->getBoleto($context, $externalId),
+                $receivable->kind === 'pix' && $provider instanceof PixReceivablesProvider => $provider->getPix(
+                    $context,
+                    $externalId,
+                    $receivable->subtype,
+                ),
+                $receivable->kind === 'boleto' && $provider instanceof BoletoReceivablesProvider => $provider->getBoleto(
+                    $context,
+                    $externalId,
+                    $receivable->subtype,
+                ),
                 default => throw new RuntimeException('O adapter não permite consultar esta cobrança.'),
             },
             'refund' => $provider instanceof PixReceivablesProvider
@@ -150,10 +158,18 @@ class ProcessReceivableOperation implements ShouldQueue
                 )
                 : throw new RuntimeException('O adapter não oferece devolução Pix.'),
             'update' => $provider instanceof BoletoReceivablesProvider
-                ? $provider->updateBoleto($context, $externalId, $operation->payload)
+                ? $provider->updateBoleto(
+                    $context,
+                    $externalId,
+                    [
+                        ...$operation->payload,
+                        'provider_metadata' => data_get($receivable->metadata, 'provider', []),
+                    ],
+                    $receivable->subtype,
+                )
                 : throw new RuntimeException('O adapter não oferece alteração de boleto.'),
             'cancel' => $provider instanceof BoletoReceivablesProvider
-                ? $provider->cancelBoleto($context, $externalId)
+                ? $provider->cancelBoleto($context, $externalId, $receivable->subtype)
                 : throw new RuntimeException('O adapter não oferece baixa de boleto.'),
             default => throw new RuntimeException('Operação de cobrança desconhecida.'),
         };

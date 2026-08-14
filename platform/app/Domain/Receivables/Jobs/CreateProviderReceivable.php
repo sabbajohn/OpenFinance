@@ -64,7 +64,10 @@ class CreateProviderReceivable implements ShouldQueue
             amount: new Money((int) $receivable->amount_minor, $receivable->currency),
             dueAt: $receivable->due_at ? new DateTimeImmutable($receivable->due_at->format('Y-m-d')) : null,
             payer: $metadata['payer'] ?? [],
-            options: $metadata['options'] ?? [],
+            options: [
+                ...($metadata['options'] ?? []),
+                'subtype' => $receivable->subtype,
+            ],
         );
 
         try {

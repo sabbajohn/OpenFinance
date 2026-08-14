@@ -56,11 +56,22 @@ final class BradescoConnectionConfigurator
                 'certificate' => 'O certificado ainda não está válido.',
             ]);
         }
+        if ((int) $certificateData['validTo_time_t'] < now('UTC')->addMonthsNoOverflow(2)->getTimestamp()) {
+            throw ValidationException::withMessages([
+                'certificate' => 'O Bradesco exige certificado A1 com pelo menos 2 meses de validade restante.',
+            ]);
+        }
+        if ((int) $certificateData['validTo_time_t'] > now('UTC')->addYears(3)->addDay()->getTimestamp()) {
+            throw ValidationException::withMessages([
+                'certificate' => 'O Bradesco aceita certificado A1 com validade máxima de 3 anos.',
+            ]);
+        }
 
         $environment = (string) ($data['environment'] ?? '');
-        $preset = config("openfinance.bradesco.pix.environments.{$environment}");
+        $product = (string) ($data['product'] ?? '');
+        $preset = config("openfinance.bradesco.{$product}.environments.{$environment}");
         if (! is_array($preset)) {
-            throw ValidationException::withMessages(['environment' => 'Ambiente Bradesco inválido.']);
+            throw ValidationException::withMessages(['environment' => 'Produto ou ambiente Bradesco inválido.']);
         }
 
         /** @var list<string> $capabilities */
@@ -70,22 +81,61 @@ final class BradescoConnectionConfigurator
             $certificatePem .= "\n".trim($chain['pem']);
         }
 
+        $productCredentials = [
+            'base_url' => $preset['base_url'],
+            'token_url' => $preset['token_url'],
+            'client_id' => $data['client_id'],
+            'client_secret' => $data['client_secret'],
+            'grant_type' => 'client_credentials',
+            'scope' => '',
+            'certificate_pem' => $certificatePem."\n",
+            'private_key_pem' => trim($privateKeyPem)."\n",
+            'private_key_passphrase' => $privateKeyPassphrase,
+        ];
+        if ($product === 'pix') {
+            $productCredentials = [
+                ...$productCredentials,
+                'receipts_timeout_seconds' => (int) config('openfinance.bradesco.pix.receipts_timeout_seconds', 45),
+                'paths' => [
+                    'charge' => '/v2/cob/{txid}',
+                    'due_charge' => '/v2/cobv/{txid}',
+                    'receipts' => '/v2/pix',
+                    'receipt' => '/v2/pix/{endToEndId}',
+                    'refund' => '/v2/pix/{endToEndId}/devolucao/{refundId}',
+                ],
+            ];
+        } else {
+            $beneficiaryTaxId = preg_replace('/\D+/', '', (string) ($data['beneficiary_tax_id'] ?? '')) ?? '';
+            if (! in_array(strlen($beneficiaryTaxId), [11, 14], true)) {
+                throw ValidationException::withMessages([
+                    'company_id' => 'A empresa deve ter CPF ou CNPJ com 11 ou 14 dígitos para contratar a Cobrança Bradesco.',
+                ]);
+            }
+            $productCredentials = [
+                ...$productCredentials,
+                'beneficiary_tax_id' => $beneficiaryTaxId,
+                'product_code' => $data['wallet_code'],
+                'negotiation_number' => $data['negotiation_number'],
+                'paths' => [
+                    'normal_create' => '/boleto/cobranca-registro/v1/cobranca',
+                    'normal_get' => '/boleto/cobranca-consulta/v1/consultar',
+                    'normal_update' => '/boleto/cobranca-altera/v1/alterar',
+                    'hybrid_create' => '/boleto-hibrido/cobranca-registro/v1/gerarBoleto',
+                    'hybrid_get' => '/boleto-hibrido/cobranca-consulta-titulo/v1/consultar',
+                    'hybrid_update' => '/boleto-hibrido/cobranca-alteracao/v1/alteraBoletoConsulta',
+                    'cancel' => '/boleto/cobranca-baixa/v1/baixar',
+                ],
+            ];
+        }
+
         return [
             'credentials' => [
-                'default_pix_key' => $data['pix_key'] ?? null,
-                'webhook_secret' => $data['webhook_secret'] ?? null,
+                ...($product === 'pix' ? [
+                    'default_pix_key' => $data['pix_key'] ?? null,
+                    'webhook_secret' => $data['webhook_secret'] ?? null,
+                ] : []),
                 'products' => [
-                    'pix' => [
-                        'base_url' => $preset['base_url'],
-                        'token_url' => $preset['token_url'],
-                        'client_id' => $data['client_id'],
-                        'client_secret' => $data['client_secret'],
-                        'grant_type' => 'client_credentials',
-                        'scope' => implode(' ', $this->scopeFor($capabilities)),
-                        'certificate_pem' => $certificatePem."\n",
-                        'private_key_pem' => trim($privateKeyPem)."\n",
-                        'private_key_passphrase' => $privateKeyPassphrase,
-                    ],
+                    $product => $productCredentials,
                 ],
             ],
             'capabilities' => $capabilities,
@@ -152,24 +202,5 @@ final class BradescoConnectionConfigurator
         }
 
         return $contents;
-    }
-
-    /**
-     * @param  list<string>  $capabilities
-     * @return list<string>
-     */
-    private function scopeFor(array $capabilities): array
-    {
-        $scopes = [];
-        foreach ($capabilities as $capability) {
-            $scopes = [...$scopes, ...match ($capability) {
-                'pix.immediate' => ['cob.read', 'cob.write'],
-                'pix.refund' => ['pix.read', 'pix.write'],
-                'webhooks' => ['webhook.read', 'webhook.write'],
-                default => [],
-            }];
-        }
-
-        return array_values(array_unique($scopes));
     }
 }

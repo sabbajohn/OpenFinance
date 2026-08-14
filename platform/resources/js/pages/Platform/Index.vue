@@ -9,12 +9,19 @@ import {
     ShieldCheck,
     X,
 } from '@lucide/vue';
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { useOrganizationAccess } from '@/composables/useOrganizationAccess';
 
 type Column = { key: string; label: string; format?: 'money' };
 type RecordRow = Record<string, any>;
 type Option = { id: string; trade_name?: string; legal_name?: string };
-type ReceivableConnection = { id: string; company_id: string; name: string };
+type ReceivableConnection = {
+    id: string;
+    company_id: string;
+    name: string;
+    provider: string;
+    capabilities: string[];
+};
 type ReceivableTitle = {
     id: string;
     company_id: string;
@@ -35,6 +42,8 @@ const props = defineProps<{
     columns: Column[];
     options?: Option[] | ReceivableOptions | null;
 }>();
+
+const { can } = useOrganizationAccess();
 
 const showForm = ref(false);
 const companyForm = useForm({
@@ -97,9 +106,20 @@ const receivableForm = useForm({
     erp_title_id: '',
     bank_connection_id: '',
     amount_minor: null as number | null,
+    amount_reais: '',
     subtype: 'immediate',
     due_at: '',
     reference: '',
+    payer_name: '',
+    payer_tax_id: '',
+    payer_address: '',
+    payer_number: '',
+    payer_complement: '',
+    payer_neighborhood: '',
+    payer_city: '',
+    payer_state: '',
+    payer_postal_code: '',
+    payer_email: '',
     idempotency_key: crypto.randomUUID(),
 });
 const companyOptions = computed(() =>
@@ -115,6 +135,20 @@ const selectedConnection = computed(() =>
         (connection) => connection.id === receivableForm.bank_connection_id,
     ),
 );
+const requiredCapability = computed(() => {
+    if (props.section === 'pix') {
+        return receivableForm.subtype === 'due' ? 'pix.due' : 'pix.immediate';
+    }
+
+    return receivableForm.subtype === 'hybrid'
+        ? 'boleto.hybrid'
+        : 'boleto.normal';
+});
+const availableConnections = computed(() =>
+    receivableOptions.value.connections.filter((connection) =>
+        connection.capabilities.includes(requiredCapability.value),
+    ),
+);
 const availableTitles = computed(() =>
     receivableOptions.value.titles.filter(
         (title) =>
@@ -122,6 +156,33 @@ const availableTitles = computed(() =>
             title.company_id === selectedConnection.value.company_id,
     ),
 );
+
+watch(
+    () => receivableForm.subtype,
+    () => {
+        if (
+            selectedConnection.value &&
+            !selectedConnection.value.capabilities.includes(
+                requiredCapability.value,
+            )
+        ) {
+            receivableForm.bank_connection_id = '';
+        }
+    },
+);
+
+const moneyToMinor = (value: string) => {
+    const normalized = value
+        .trim()
+        .replace(/\./g, '')
+        .replace(',', '.')
+        .replace(/[^\d.-]/g, '');
+    const amount = Number(normalized);
+
+    return Number.isFinite(amount) && amount > 0
+        ? Math.round(amount * 100)
+        : null;
+};
 
 const valueAt = (row: RecordRow, path: string) =>
     path.split('.').reduce((value, key) => value?.[key], row);
@@ -187,14 +248,37 @@ const submit = () => {
     }
 
     if (['pix', 'boleto'].includes(props.section)) {
-        receivableForm.subtype =
-            props.section === 'pix' ? 'immediate' : 'normal';
+        const taxId = receivableForm.payer_tax_id.replace(/\D/g, '');
+        receivableForm.transform((data) => ({
+            ...data,
+            amount_minor: data.amount_reais
+                ? moneyToMinor(data.amount_reais)
+                : null,
+            payer:
+                data.payer_name || taxId
+                    ? {
+                          nome: data.payer_name,
+                          ...(taxId.length === 11
+                              ? { cpf: taxId }
+                              : { cnpj: taxId }),
+                          endereco: data.payer_address,
+                          numero: data.payer_number,
+                          complemento: data.payer_complement,
+                          bairro: data.payer_neighborhood,
+                          cidade: data.payer_city,
+                          uf: data.payer_state.toUpperCase(),
+                          cep: data.payer_postal_code.replace(/\D/g, ''),
+                          email: data.payer_email,
+                      }
+                    : {},
+        }));
         receivableForm.post(props.section === 'pix' ? '/pix' : '/boletos', {
             onSuccess: () => {
                 showForm.value = false;
                 receivableForm.reset();
                 receivableForm.idempotency_key = crypto.randomUUID();
             },
+            onFinish: () => receivableForm.transform((data) => data),
         });
     }
 };
@@ -264,13 +348,16 @@ const cancelBoleto = (row: RecordRow) => {
         idempotency_key: crypto.randomUUID(),
     });
 };
-const canCreate = [
-    'companies',
-    'bank-connections',
-    'erp',
-    'pix',
-    'boleto',
-].includes(props.section);
+const createPermissions: Record<string, string> = {
+    companies: 'companies.manage',
+    'bank-connections': 'bank-connections.manage',
+    erp: 'erp-integrations.manage',
+    pix: 'financial.operate',
+    boleto: 'financial.operate',
+};
+const canCreate = Boolean(
+    createPermissions[props.section] && can(createPermissions[props.section]),
+);
 </script>
 
 <template>
@@ -470,11 +557,16 @@ const canCreate = [
                     >
                         <option value="" disabled>Selecione</option>
                         <option
-                            v-for="connection in receivableOptions.connections"
+                            v-for="connection in availableConnections"
                             :key="connection.id"
                             :value="connection.id"
                         >
-                            {{ connection.name }}
+                            {{ connection.name }} ·
+                            {{
+                                connection.provider === 'bradesco'
+                                    ? 'Bradesco'
+                                    : 'Sicredi'
+                            }}
                         </option>
                     </select></label
                 >
@@ -494,11 +586,9 @@ const canCreate = [
                     </select></label
                 >
                 <label class="field"
-                    >Valor em centavos<input
-                        v-model.number="receivableForm.amount_minor"
-                        type="number"
-                        min="1"
-                        step="1"
+                    >Valor em reais<input
+                        v-model="receivableForm.amount_reais"
+                        inputmode="decimal"
                         placeholder="Em branco usa o saldo do título"
                 /></label>
                 <label class="field"
@@ -517,11 +607,94 @@ const canCreate = [
                     >Vencimento<input
                         v-model="receivableForm.due_at"
                         type="date"
+                        :required="
+                            props.section === 'boleto' ||
+                            (props.section === 'pix' &&
+                                receivableForm.subtype === 'due')
+                        "
                 /></label>
                 <label class="field"
                     >Referência<input v-model="receivableForm.reference"
                 /></label>
+                <label
+                    v-if="
+                        props.section === 'boleto' ||
+                        (props.section === 'pix' &&
+                            receivableForm.subtype === 'due')
+                    "
+                    class="field"
+                    >Nome do pagador<input
+                        v-model="receivableForm.payer_name"
+                        required
+                /></label>
+                <label
+                    v-if="
+                        props.section === 'boleto' ||
+                        (props.section === 'pix' &&
+                            receivableForm.subtype === 'due')
+                    "
+                    class="field"
+                    >CPF ou CNPJ do pagador<input
+                        v-model="receivableForm.payer_tax_id"
+                        required
+                        inputmode="numeric"
+                /></label>
+                <template v-if="props.section === 'boleto'">
+                    <label class="field"
+                        >Endereço do pagador<input
+                            v-model="receivableForm.payer_address"
+                            required
+                    /></label>
+                    <label class="field"
+                        >Número<input
+                            v-model="receivableForm.payer_number"
+                            required
+                    /></label>
+                    <label class="field"
+                        >Complemento<input
+                            v-model="receivableForm.payer_complement"
+                    /></label>
+                    <label class="field"
+                        >Bairro<input
+                            v-model="receivableForm.payer_neighborhood"
+                            required
+                    /></label>
+                    <label class="field"
+                        >Cidade<input
+                            v-model="receivableForm.payer_city"
+                            required
+                    /></label>
+                    <label class="field"
+                        >UF<input
+                            v-model="receivableForm.payer_state"
+                            required
+                            maxlength="2"
+                            placeholder="SP"
+                    /></label>
+                    <label class="field"
+                        >CEP<input
+                            v-model="receivableForm.payer_postal_code"
+                            required
+                            inputmode="numeric"
+                            maxlength="9"
+                    /></label>
+                    <label class="field"
+                        >E-mail<input
+                            v-model="receivableForm.payer_email"
+                            type="email"
+                    /></label>
+                </template>
             </div>
+
+            <p
+                v-if="
+                    ['pix', 'boleto'].includes(props.section) &&
+                    Object.keys(receivableForm.errors).length
+                "
+                class="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"
+            >
+                Revise os campos da cobrança antes de continuar.
+            </p>
 
             <div class="mt-5 flex justify-end gap-2">
                 <button
@@ -605,6 +778,7 @@ const canCreate = [
                                 <button
                                     v-else-if="
                                         props.section === 'reconciliations' &&
+                                        can('reconciliation.approve') &&
                                         row.status === 'open' &&
                                         row.candidates?.length
                                     "
@@ -616,6 +790,7 @@ const canCreate = [
                                 </button>
                                 <div
                                     v-else-if="
+                                        can('financial.operate') &&
                                         ['pix', 'boleto'].includes(
                                             props.section,
                                         )

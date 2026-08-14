@@ -33,7 +33,7 @@ import { dashboard, login } from '@/routes';
                 <p
                     class="text-sm font-semibold tracking-[0.2em] text-emerald-400 uppercase"
                 >
-                    Banking orchestration
+                    Orquestração financeira
                 </p>
                 <h1
                     class="mt-5 max-w-3xl text-4xl font-semibold tracking-tight sm:text-6xl"
@@ -76,7 +76,7 @@ import { dashboard, login } from '@/routes';
                     <Landmark class="size-6 text-sky-400" />
                     <h2 class="mt-8 font-semibold">Multi-banco</h2>
                     <p class="mt-2 text-sm text-slate-400">
-                        Sicredi primeiro, adapters por capacidade.
+                        Bradesco e Sicredi com adapters por capacidade.
                     </p>
                 </article>
                 <article

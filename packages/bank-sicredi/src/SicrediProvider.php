@@ -6,6 +6,7 @@ use DateTimeImmutable;
 use Psr\Http\Message\ServerRequestInterface;
 use Sabba\OpenFinance\Core\Contracts\AccountDataProvider;
 use Sabba\OpenFinance\Core\Contracts\BoletoReceivablesProvider;
+use Sabba\OpenFinance\Core\Contracts\PixReceiptsProvider;
 use Sabba\OpenFinance\Core\Contracts\PixReceivablesProvider;
 use Sabba\OpenFinance\Core\Contracts\WebhookVerifier;
 use Sabba\OpenFinance\Core\DTO\AccountSnapshot;
@@ -13,6 +14,7 @@ use Sabba\OpenFinance\Core\DTO\BalanceSnapshot;
 use Sabba\OpenFinance\Core\DTO\CanonicalTransaction;
 use Sabba\OpenFinance\Core\DTO\ConnectionContext;
 use Sabba\OpenFinance\Core\DTO\Money;
+use Sabba\OpenFinance\Core\DTO\PixReceiptQuery;
 use Sabba\OpenFinance\Core\DTO\ReceivableCommand;
 use Sabba\OpenFinance\Core\DTO\ReceivableResult;
 use Sabba\OpenFinance\Core\DTO\TransactionPage;
@@ -20,7 +22,7 @@ use Sabba\OpenFinance\Core\DTO\TransactionQuery;
 use Sabba\OpenFinance\Core\Enums\TransactionDirection;
 use Sabba\OpenFinance\Core\Enums\TransactionStatus;
 
-final readonly class SicrediProvider implements AccountDataProvider, BoletoReceivablesProvider, PixReceivablesProvider, WebhookVerifier
+final readonly class SicrediProvider implements AccountDataProvider, BoletoReceivablesProvider, PixReceiptsProvider, PixReceivablesProvider, WebhookVerifier
 {
     public function __construct(private SicrediHttpClient $http) {}
 
@@ -104,35 +106,104 @@ final readonly class SicrediProvider implements AccountDataProvider, BoletoRecei
 
     public function createPix(ConnectionContext $context, ReceivableCommand $command): ReceivableResult
     {
+        $pixKey = $command->options['pix_key'] ?? $context->credentials['default_pix_key'] ?? null;
+        if (! is_string($pixKey) || $pixKey === '') {
+            throw new SicrediProviderException('Informe uma chave Pix para criar a cobrança no Sicredi.');
+        }
+
+        $txid = $this->identifier($command->reference, 26, 35);
         $due = $command->dueAt !== null;
-        $resource = $due ? 'pix_due' : 'pix';
-        $path = $this->path($context, 'pix', $resource, $due ? '/cobv/{txid}' : '/cob/{txid}');
-        $path = str_replace('{txid}', rawurlencode($command->reference), $path);
+        $path = str_replace(
+            '{txid}',
+            rawurlencode($txid),
+            $this->path($context, 'pix', $due ? 'due_charge' : 'charge', $due ? '/cobv/{txid}' : '/cob/{txid}'),
+        );
+        $payer = $this->payer($command->payer);
         $payload = [
-            'calendario' => $due ? ['dataDeVencimento' => $command->dueAt->format('Y-m-d')] : ['expiracao' => $command->options['expires_in'] ?? 3600],
-            'valor' => ['original' => $command->amount->toDecimal()],
-            'chave' => $command->options['pix_key'] ?? $context->credentials['default_pix_key'] ?? null,
+            'calendario' => $due
+                ? [
+                    'dataDeVencimento' => $command->dueAt->format('Y-m-d'),
+                    'validadeAposVencimento' => (int) ($command->options['valid_after_due_days'] ?? 30),
+                ]
+                : ['expiracao' => (int) ($command->options['expires_in'] ?? 3600)],
+            'valor' => [
+                'original' => $command->amount->toDecimal(),
+                ...($due ? [] : ['modalidadeAlteracao' => 0]),
+            ],
+            'chave' => $pixKey,
             'solicitacaoPagador' => $command->options['message'] ?? null,
-            ...($command->payer ? ['devedor' => $command->payer] : []),
+            ...($payer !== [] ? ['devedor' => $payer] : []),
         ];
         $response = $this->http->request($context, 'pix', 'PUT', $path, ['json' => array_filter($payload, fn (mixed $value): bool => $value !== null)]);
 
-        return $this->receivableResult($response, $command->amount, $command->reference);
+        return $this->receivableResult($response, $command->amount, $txid);
     }
 
-    public function getPix(ConnectionContext $context, string $externalId): ReceivableResult
+    public function getPix(ConnectionContext $context, string $externalId, ?string $subtype = null): ReceivableResult
     {
-        $path = str_replace('{txid}', rawurlencode($externalId), $this->path($context, 'pix', 'pix', '/cob/{txid}'));
+        $due = $subtype === 'due';
+        $path = str_replace(
+            '{txid}',
+            rawurlencode($externalId),
+            $this->path($context, 'pix', $due ? 'due_charge' : 'charge', $due ? '/cobv/{txid}' : '/cob/{txid}'),
+        );
         $response = $this->http->request($context, 'pix', 'GET', $path);
 
         return $this->receivableResult($response, $this->moneyFromResponse($response), $externalId);
+    }
+
+    public function receivedPix(PixReceiptQuery $query): TransactionPage
+    {
+        $page = max(0, (int) ($query->cursor ?? 0));
+        $taxId = preg_replace('/\D+/', '', (string) $query->payerTaxId) ?? '';
+        $response = $this->http->request(
+            $query->context,
+            'pix',
+            'GET',
+            $this->path($query->context, 'pix', 'receipts', '/pix'),
+            [
+                'query' => array_filter([
+                    'inicio' => $query->from->format(DATE_RFC3339_EXTENDED),
+                    'fim' => $query->to->format(DATE_RFC3339_EXTENDED),
+                    'txid' => $query->txid,
+                    'txIdPresente' => $query->hasTxid,
+                    'devolucaoPresente' => $query->hasRefund,
+                    'cpf' => strlen($taxId) === 11 ? $taxId : null,
+                    'cnpj' => strlen($taxId) === 14 ? $taxId : null,
+                    'paginacao.paginaAtual' => $page,
+                    'paginacao.itensPorPagina' => max(1, min(1000, $query->limit)),
+                ], fn (mixed $value): bool => $value !== null && $value !== ''),
+            ],
+        );
+        $transactions = array_map(
+            fn (array $item): CanonicalTransaction => $this->receipt($item),
+            $this->items($response, ['pix', 'data.pix', 'recebimentos']),
+        );
+        $currentPage = (int) $this->value($response, ['parametros.paginacao.paginaAtual'], $page);
+        $totalPages = (int) $this->value($response, ['parametros.paginacao.quantidadeDePaginas'], 1);
+
+        return new TransactionPage(
+            $transactions,
+            $currentPage + 1 < $totalPages ? (string) ($currentPage + 1) : null,
+        );
+    }
+
+    public function receivedPixById(ConnectionContext $context, string $endToEndId): CanonicalTransaction
+    {
+        $path = str_replace(
+            '{endToEndId}',
+            rawurlencode($endToEndId),
+            $this->path($context, 'pix', 'receipt', '/pix/{endToEndId}'),
+        );
+
+        return $this->receipt($this->http->request($context, 'pix', 'GET', $path));
     }
 
     public function refundPix(ConnectionContext $context, string $externalId, string $refundId, Money $amount): ReceivableResult
     {
         $path = str_replace(
             ['{endToEndId}', '{refundId}'],
-            [rawurlencode($externalId), rawurlencode($refundId)],
+            [rawurlencode($externalId), rawurlencode($this->identifier($refundId, 1, 35))],
             $this->path($context, 'pix', 'refund', '/pix/{endToEndId}/devolucao/{refundId}'),
         );
         $response = $this->http->request($context, 'pix', 'PUT', $path, [
@@ -144,12 +215,19 @@ final readonly class SicrediProvider implements AccountDataProvider, BoletoRecei
 
     public function createBoleto(ConnectionContext $context, ReceivableCommand $command): ReceivableResult
     {
+        $config = $context->credentials['products']['boleto'] ?? [];
+        $options = $command->options;
+        $subtype = (string) ($options['subtype'] ?? 'normal');
+        unset($options['subtype']);
         $payload = [
-            ...$command->options,
+            ...$options,
+            'codigoBeneficiario' => $config['beneficiary_code'] ?? null,
+            'tipoCobranca' => $subtype === 'hybrid' ? 'HIBRIDO' : 'NORMAL',
+            'especieDocumento' => $options['especieDocumento'] ?? 'DUPLICATA_MERCANTIL_INDICACAO',
             'seuNumero' => $command->reference,
             'valor' => $command->amount->toDecimal(),
             'dataVencimento' => $command->dueAt?->format('Y-m-d'),
-            'pagador' => $command->payer,
+            'pagador' => $this->boletoPayer($command->payer),
         ];
         $response = $this->http->request($context, 'boleto', 'POST', $this->path($context, 'boleto', 'boletos', '/boletos'), [
             'json' => array_filter($payload, fn (mixed $value): bool => $value !== null && $value !== []),
@@ -158,24 +236,32 @@ final readonly class SicrediProvider implements AccountDataProvider, BoletoRecei
         return $this->receivableResult($response, $command->amount, $command->reference);
     }
 
-    public function getBoleto(ConnectionContext $context, string $externalId): ReceivableResult
+    public function getBoleto(ConnectionContext $context, string $externalId, ?string $subtype = null): ReceivableResult
     {
+        $beneficiaryCode = data_get($context->credentials, 'products.boleto.beneficiary_code');
         $response = $this->http->request($context, 'boleto', 'GET', $this->path($context, 'boleto', 'boletos', '/boletos'), [
-            'query' => ['nossoNumero' => $externalId],
+            'query' => array_filter([
+                'codigoBeneficiario' => $beneficiaryCode,
+                'nossoNumero' => $externalId,
+            ]),
         ]);
 
         return $this->receivableResult($response, $this->moneyFromResponse($response), $externalId);
     }
 
-    public function cancelBoleto(ConnectionContext $context, string $externalId): ReceivableResult
+    public function cancelBoleto(ConnectionContext $context, string $externalId, ?string $subtype = null): ReceivableResult
     {
         $path = str_replace('{nossoNumero}', rawurlencode($externalId), $this->path($context, 'boleto', 'cancel', '/boletos/{nossoNumero}/baixa'));
-        $response = $this->http->request($context, 'boleto', 'PATCH', $path);
+        $response = $this->http->request($context, 'boleto', 'PATCH', $path, [
+            'headers' => [
+                'codigoBeneficiario' => (string) data_get($context->credentials, 'products.boleto.beneficiary_code'),
+            ],
+        ]);
 
         return $this->receivableResult($response, $this->moneyFromResponse($response), $externalId);
     }
 
-    public function updateBoleto(ConnectionContext $context, string $externalId, array $changes): ReceivableResult
+    public function updateBoleto(ConnectionContext $context, string $externalId, array $changes, ?string $subtype = null): ReceivableResult
     {
         $path = str_replace('{nossoNumero}', rawurlencode($externalId), $this->path($context, 'boleto', 'update', '/boletos/{nossoNumero}'));
         $response = $this->http->request($context, 'boleto', 'PATCH', $path, [
@@ -202,23 +288,42 @@ final readonly class SicrediProvider implements AccountDataProvider, BoletoRecei
 
     private function receivableResult(array $response, Money $fallbackAmount, string $fallbackId): ReceivableResult
     {
-        $data = $this->firstObject($response, ['data', 'body']);
+        $data = $this->firstObject($response, ['data', 'body', 'cobv']);
+        $paidAt = $this->nullable($this->value($data, ['paidAt', 'dataLiquidacao', 'pix.0.horario', 'horario.liquidacao']));
 
         return new ReceivableResult(
             externalId: (string) $this->value($data, ['txid', 'nossoNumero', 'id', 'externalId'], $fallbackId),
-            status: strtolower((string) $this->value($data, ['status', 'situacao'], 'pending')),
+            status: $this->receivableStatus((string) $this->value($data, ['status', 'situacao'], 'pending')),
             amount: $this->moneyFromResponse($data, $fallbackAmount),
             copyAndPaste: $this->nullable($this->value($data, ['pixCopiaECola', 'copyAndPaste', 'brcode'])),
             barcode: $this->nullable($this->value($data, ['codigoBarras', 'barcode'])),
             digitableLine: $this->nullable($this->value($data, ['linhaDigitavel', 'digitableLine'])),
-            paidAt: ($paid = $this->nullable($this->value($data, ['paidAt', 'dataLiquidacao']))) ? new DateTimeImmutable($paid) : null,
+            paidAt: $paidAt ? new DateTimeImmutable($paidAt) : null,
             metadata: $response,
         );
     }
 
+    /** @param array<string,mixed> $payer */
+    private function boletoPayer(array $payer): array
+    {
+        $cpf = preg_replace('/\D+/', '', (string) ($payer['cpf'] ?? '')) ?? '';
+        $cnpj = preg_replace('/\D+/', '', (string) ($payer['cnpj'] ?? '')) ?? '';
+        $document = $cnpj !== '' ? $cnpj : $cpf;
+
+        return array_filter([
+            'tipoPessoa' => $cnpj !== '' ? 'PESSOA_JURIDICA' : 'PESSOA_FISICA',
+            'documento' => $document,
+            'nome' => $payer['nome'] ?? $payer['name'] ?? null,
+            'endereco' => $payer['endereco'] ?? $payer['address'] ?? null,
+            'cidade' => $payer['cidade'] ?? $payer['city'] ?? null,
+            'uf' => $payer['uf'] ?? $payer['state'] ?? null,
+            'cep' => $payer['cep'] ?? $payer['postal_code'] ?? null,
+        ], fn (mixed $value): bool => $value !== null && $value !== '');
+    }
+
     private function moneyFromResponse(array $response, ?Money $fallback = null): Money
     {
-        $value = $this->value($response, ['valor.original', 'valor', 'amount']);
+        $value = $this->value($response, ['valor.0.original', 'valor.original', 'valor', 'amount']);
 
         return $value !== null ? Money::fromDecimal((string) $value) : ($fallback ?? new Money(0));
     }
@@ -231,6 +336,19 @@ final readonly class SicrediProvider implements AccountDataProvider, BoletoRecei
             'deleted', 'excluido' => TransactionStatus::Deleted,
             'failed', 'rejeitado' => TransactionStatus::Failed,
             default => TransactionStatus::Posted,
+        };
+    }
+
+    private function receivableStatus(string $status): string
+    {
+        return match (mb_strtolower($status)) {
+            'ativa', 'active', 'created' => 'active',
+            'concluida', 'concluída', 'concluido', 'concluído', 'paid', 'liquidado', 'liquidada' => 'paid',
+            'devolvido', 'devolvida', 'refunded' => 'refunded',
+            'removida_pelo_usuario_recebedor', 'removida_pelo_psp', 'cancelado', 'cancelada', 'removed' => 'cancelled',
+            'em_processamento', 'pending', 'pendente' => 'pending',
+            'nao_realizado', 'não_realizado', 'failed', 'rejeitado', 'rejeitada' => 'failed',
+            default => mb_strtolower($status),
         };
     }
 
@@ -303,5 +421,52 @@ final readonly class SicrediProvider implements AccountDataProvider, BoletoRecei
         }
 
         return str_repeat('*', max(0, strlen($value) - 4)).substr($value, -4);
+    }
+
+    /** @param array<string,mixed> $item */
+    private function receipt(array $item): CanonicalTransaction
+    {
+        $endToEndId = $this->nullable($this->value($item, ['endToEndId', 'e2eid']));
+        $txid = $this->nullable($this->value($item, ['txid', 'txId']));
+        $pixKey = $this->nullable($this->value($item, ['chave', 'pixKey']));
+
+        return new CanonicalTransaction(
+            externalId: $endToEndId,
+            type: 'pix',
+            direction: TransactionDirection::Credit,
+            status: TransactionStatus::Posted,
+            amount: Money::fromDecimal((string) $this->value($item, ['valor', 'amount'], '0')),
+            occurredAt: new DateTimeImmutable((string) $this->value($item, ['horario', 'paidAt'], 'now')),
+            observedAt: new DateTimeImmutable,
+            description: $this->nullable($this->value($item, ['infoPagador', 'descricao'], 'Pix recebido')),
+            counterpartyName: $this->nullable($this->value($item, ['pagador.nome', 'payer.name'])),
+            counterpartyTaxId: $this->nullable($this->value($item, ['pagador.cpf', 'pagador.cnpj', 'payer.taxId'])),
+            identifiers: array_filter([
+                'end_to_end_id' => $endToEndId,
+                'txid' => $txid,
+                'pix_key' => $pixKey,
+            ], fn (?string $value): bool => $value !== null && $value !== ''),
+            metadata: $item,
+        );
+    }
+
+    /** @param array<string,mixed> $payer */
+    private function payer(array $payer): array
+    {
+        return array_filter([
+            'cpf' => isset($payer['cpf']) ? preg_replace('/\D+/', '', (string) $payer['cpf']) : null,
+            'cnpj' => isset($payer['cnpj']) ? preg_replace('/\D+/', '', (string) $payer['cnpj']) : null,
+            'nome' => $payer['nome'] ?? $payer['name'] ?? null,
+        ], fn (mixed $value): bool => $value !== null && $value !== '');
+    }
+
+    private function identifier(string $value, int $minimum, int $maximum): string
+    {
+        $normalized = preg_replace('/[^a-zA-Z0-9]/', '', $value) ?? '';
+        if (strlen($normalized) >= $minimum && strlen($normalized) <= $maximum) {
+            return $normalized;
+        }
+
+        return substr(hash('sha256', $value), 0, max($minimum, min(32, $maximum)));
     }
 }

@@ -25,21 +25,12 @@ final readonly class SicrediHttpClient
         array $options = [],
     ): array {
         $config = $this->productConfig($context, $product);
-        $client = new Client([
-            'base_uri' => rtrim((string) $config['base_url'], '/').'/',
-            'timeout' => $this->timeoutSeconds,
-            'connect_timeout' => 5,
-            'cert' => $config['certificate_path'] ?? null,
-            'ssl_key' => isset($config['private_key_path'])
-                ? [$config['private_key_path'], $config['private_key_passphrase'] ?? '']
-                : null,
-            'http_errors' => false,
-            ...($this->handler ? ['handler' => $this->handler] : []),
-        ]);
+        $client = $this->client($config, true);
 
         $options['headers'] = [
             'Accept' => 'application/json',
             'Authorization' => 'Bearer '.$this->accessToken($context, $product, $config),
+            ...(! empty($config['api_key']) ? ['x-api-key' => $config['api_key']] : []),
             ...($config['headers'] ?? []),
             ...($options['headers'] ?? []),
         ];
@@ -50,18 +41,7 @@ final readonly class SicrediHttpClient
             throw new SicrediProviderException('Falha de transporte na API Sicredi: '.$exception->getMessage(), previous: $exception);
         }
 
-        $body = (string) $response->getBody();
-        $decoded = $body === '' ? [] : json_decode($body, true);
-
-        if ($response->getStatusCode() >= 400) {
-            throw new SicrediProviderException(
-                message: (string) ($decoded['message'] ?? $decoded['error']['message'] ?? 'A API Sicredi rejeitou a operação.'),
-                responseStatus: $response->getStatusCode(),
-                providerCode: $decoded['code'] ?? $decoded['error']['code'] ?? null,
-            );
-        }
-
-        return is_array($decoded) ? $decoded : [];
+        return $this->decodeResponse($response->getStatusCode(), (string) $response->getBody(), 'A API Sicredi rejeitou a operação.');
     }
 
     /**
@@ -86,7 +66,7 @@ final readonly class SicrediHttpClient
         $key = 'sicredi:token:'.hash('sha256', implode('|', [
             $context->connectionId,
             $product,
-            (string) $config['client_id'],
+            (string) ($config['client_id'] ?? $config['username'] ?? ''),
             (string) $config['token_url'],
         ]));
 
@@ -108,42 +88,87 @@ final readonly class SicrediHttpClient
      */
     private function fetchAccessToken(array $config): array
     {
-        $client = new Client([
-            'timeout' => $this->timeoutSeconds,
-            'connect_timeout' => 5,
-            'cert' => $config['certificate_path'] ?? null,
-            'ssl_key' => isset($config['private_key_path'])
-                ? [$config['private_key_path'], $config['private_key_passphrase'] ?? '']
-                : null,
-            'http_errors' => false,
-            ...($this->handler ? ['handler' => $this->handler] : []),
-        ]);
+        $client = $this->client($config);
+        $grantType = (string) ($config['grant_type'] ?? 'client_credentials');
+        $request = [
+            'form_params' => array_filter([
+                'grant_type' => $grantType,
+                'username' => $grantType === 'password' ? ($config['username'] ?? null) : null,
+                'password' => $grantType === 'password' ? ($config['password'] ?? null) : null,
+                'scope' => $config['scope'] ?? null,
+            ], fn (mixed $value): bool => $value !== null && $value !== ''),
+            'headers' => [
+                'Accept' => 'application/json',
+                ...(! empty($config['api_key']) ? ['x-api-key' => $config['api_key']] : []),
+                ...($config['token_headers'] ?? []),
+            ],
+        ];
+        if ($grantType === 'client_credentials') {
+            $request['auth'] = [(string) $config['client_id'], (string) $config['client_secret']];
+        }
 
         try {
-            $response = $client->post((string) $config['token_url'], [
-                'auth' => [(string) $config['client_id'], (string) $config['client_secret']],
-                'form_params' => array_filter([
-                    'grant_type' => $config['grant_type'] ?? 'client_credentials',
-                    'scope' => $config['scope'] ?? null,
-                ], fn (mixed $value): bool => $value !== null && $value !== ''),
-                'headers' => ['Accept' => 'application/json'],
-            ]);
+            $response = $client->post((string) $config['token_url'], $request);
         } catch (GuzzleException $exception) {
             throw new SicrediProviderException('Falha ao autenticar na API Sicredi: '.$exception->getMessage(), previous: $exception);
         }
 
-        $decoded = json_decode((string) $response->getBody(), true);
-        $token = is_array($decoded) ? ($decoded['access_token'] ?? null) : null;
+        $decoded = $this->decodeResponse(
+            $response->getStatusCode(),
+            (string) $response->getBody(),
+            'Não foi possível obter o token OAuth2 do Sicredi.',
+        );
+        if (! is_string($decoded['access_token'] ?? null) || $decoded['access_token'] === '') {
+            throw new SicrediProviderException(
+                'Não foi possível obter o token OAuth2 do Sicredi.',
+                $response->getStatusCode(),
+            );
+        }
 
-        if ($response->getStatusCode() >= 400 || ! is_string($token)) {
-            $message = is_array($decoded)
-                ? ($decoded['error_description'] ?? $decoded['message'] ?? $decoded['error']['message'] ?? null)
+        return $decoded;
+    }
+
+    /** @param array<string,mixed> $config */
+    private function client(array $config, bool $withBaseUri = false): Client
+    {
+        return new Client([
+            ...($withBaseUri ? ['base_uri' => rtrim((string) $config['base_url'], '/').'/'] : []),
+            'timeout' => $this->timeoutSeconds,
+            'connect_timeout' => 5,
+            ...(! empty($config['certificate_path']) ? ['cert' => $config['certificate_path']] : []),
+            ...(! empty($config['private_key_path']) ? [
+                'ssl_key' => [$config['private_key_path'], $config['private_key_passphrase'] ?? ''],
+            ] : []),
+            'http_errors' => false,
+            ...($this->handler ? ['handler' => $this->handler] : []),
+        ]);
+    }
+
+    /** @return array<string,mixed> */
+    private function decodeResponse(int $status, string $body, string $fallbackMessage): array
+    {
+        $decoded = $body === '' ? [] : json_decode($body, true);
+        $decoded = is_array($decoded) ? $decoded : [];
+
+        if ($status >= 400) {
+            $violation = is_array($decoded['violacoes'][0] ?? null)
+                ? ($decoded['violacoes'][0]['razao'] ?? $decoded['violacoes'][0]['reason'] ?? null)
                 : null;
+            $message = $decoded['error_description']
+                ?? $decoded['detail']
+                ?? $decoded['message']
+                ?? $violation
+                ?? $decoded['title']
+                ?? (is_array($decoded['error'] ?? null) ? ($decoded['error']['message'] ?? null) : null);
+            $code = $decoded['code']
+                ?? $decoded['type']
+                ?? (is_string($decoded['error'] ?? null) ? $decoded['error'] : null)
+                ?? (is_array($decoded['error'] ?? null) ? ($decoded['error']['code'] ?? null) : null);
 
             throw new SicrediProviderException(
-                is_string($message) && $message !== '' ? $message : 'Não foi possível obter o token OAuth2 do Sicredi.',
-                $response->getStatusCode(),
-                is_array($decoded) ? ($decoded['code'] ?? (is_string($decoded['error'] ?? null) ? $decoded['error'] : null)) : null,
+                is_string($message) && $message !== '' ? $message : $fallbackMessage,
+                $status,
+                is_scalar($code) ? (string) $code : null,
             );
         }
 
@@ -155,7 +180,15 @@ final readonly class SicrediHttpClient
     {
         $config = $context->credentials['products'][$product] ?? null;
 
-        if (! is_array($config) || empty($config['base_url']) || empty($config['token_url']) || empty($config['client_id']) || empty($config['client_secret'])) {
+        if (! is_array($config) || empty($config['base_url']) || empty($config['token_url'])) {
+            throw new SicrediProviderException("Credenciais do produto Sicredi [{$product}] não configuradas.");
+        }
+
+        $grantType = (string) ($config['grant_type'] ?? 'client_credentials');
+        $credentialsMissing = $grantType === 'password'
+            ? empty($config['username']) || empty($config['password']) || empty($config['api_key'])
+            : empty($config['client_id']) || empty($config['client_secret']);
+        if ($credentialsMissing) {
             throw new SicrediProviderException("Credenciais do produto Sicredi [{$product}] não configuradas.");
         }
 

@@ -1,0 +1,13 @@
+{
+    "endToEndId": "E237202608140000000000000000004",
+    "txid": "ERP98765432109876543210987",
+    "valor": "45.67",
+    "chave": "financeiro@example.test",
+    "horario": "2026-08-14T17:02:00.456Z",
+    "infoPagador": "Liquidação da cobrança",
+    "pagador": {
+        "nome": "Pessoa Pagadora",
+        "cpf": "12345678901"
+    },
+    "devolucoes": []
+}

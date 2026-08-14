@@ -19,6 +19,16 @@ class DatabaseSeederTest extends TestCase
     public function test_local_bootstrap_is_idempotent_and_does_not_require_dev_factories(): void
     {
         $this->seed(DatabaseSeeder::class);
+
+        $user = User::query()->firstOrFail();
+        $user->forceFill([
+            'password' => Hash::make('changed-password'),
+            'remember_token' => 'remember-me',
+            'two_factor_secret' => 'secret',
+            'two_factor_recovery_codes' => 'codes',
+            'two_factor_confirmed_at' => now(),
+        ])->save();
+
         $this->seed(DatabaseSeeder::class);
 
         $this->assertDatabaseCount(Organization::class, 1);
@@ -49,8 +59,12 @@ class DatabaseSeederTest extends TestCase
             'status' => 'active',
         ]);
 
-        $user = User::query()->firstOrFail();
+        $user->refresh();
         $this->assertTrue(Hash::check('password', $user->password));
+        $this->assertNull($user->remember_token);
+        $this->assertNull($user->two_factor_secret);
+        $this->assertNull($user->two_factor_recovery_codes);
+        $this->assertNull($user->two_factor_confirmed_at);
         $this->assertSame('owner', $user->organizations()->firstOrFail()->pivot->role);
     }
 }

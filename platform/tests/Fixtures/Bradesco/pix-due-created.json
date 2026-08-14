@@ -1,0 +1,13 @@
+{
+    "txid": "ERP98765432109876543210987",
+    "status": "ATIVA",
+    "calendario": {
+        "dataDeVencimento": "2026-08-20",
+        "validadeAposVencimento": 30
+    },
+    "valor": {
+        "original": "45.67"
+    },
+    "chave": "financeiro@example.test",
+    "pixCopiaECola": "000201010212bradescoduefixture"
+}

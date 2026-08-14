@@ -4,10 +4,8 @@ namespace Database\Seeders;
 
 use App\Domain\Identity\Models\Company;
 use App\Domain\Identity\Models\Organization;
-use App\Models\User;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
-use Illuminate\Support\Facades\Hash;
 
 class DatabaseSeeder extends Seeder
 {
@@ -24,22 +22,11 @@ class DatabaseSeeder extends Seeder
             return;
         }
 
-        $organization = Organization::query()->firstOrCreate(
-            ['slug' => 'sabba-sistemas'],
-            ['name' => 'Sabba Sistemas'],
-        );
-        $user = User::query()->firstOrCreate(
-            ['email' => 'admin@openfinance.local'],
-            [
-                'name' => 'Administrador OpenFinance',
-                'email_verified_at' => now(),
-                'password' => Hash::make('password'),
-            ],
-        );
-        $user->organizations()->syncWithoutDetaching([
-            $organization->getKey() => ['role' => 'owner', 'accepted_at' => now()],
-        ]);
-        $user->forceFill(['current_organization_id' => $organization->getKey()])->save();
+        $this->call(LocalAdminSeeder::class);
+
+        $organization = Organization::query()
+            ->where('slug', 'sabba-sistemas')
+            ->firstOrFail();
         Company::query()->firstOrCreate(
             [
                 'organization_id' => $organization->getKey(),
