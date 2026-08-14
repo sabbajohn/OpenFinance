@@ -8,6 +8,9 @@ use App\Domain\Banking\Models\BankAccount;
 use App\Domain\Banking\Models\BankConnection;
 use App\Domain\Banking\Models\BankTransaction;
 use App\Domain\Banking\Models\SyncRun;
+use App\Domain\Banking\Services\BradescoConnectionConfigurator;
+use App\Domain\Banking\Services\ConnectionContextFactory;
+use App\Domain\Banking\Services\SicrediConnectionConfigurator;
 use App\Domain\ERP\Models\ErpConnection;
 use App\Domain\ERP\Models\ErpTitle;
 use App\Domain\Events\Models\OutboxEvent;
@@ -23,8 +26,15 @@ use App\Domain\Reconciliation\Services\ReconciliationDecisionService;
 use App\Support\OrganizationContext;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
+use Sabba\OpenFinance\Bradesco\BradescoHttpClient;
+use Sabba\OpenFinance\Bradesco\BradescoProviderException;
+use Sabba\OpenFinance\Core\Enums\Capability;
+use Sabba\OpenFinance\Sicredi\SicrediHttpClient;
+use Sabba\OpenFinance\Sicredi\SicrediProviderException;
+use Throwable;
 
 class PlatformController extends Controller
 {
@@ -54,14 +64,76 @@ class PlatformController extends Controller
 
     public function bankConnections(): Response
     {
-        return $this->page('Conexões bancárias', 'bank-connections', BankConnection::query()->withCount('accounts')->latest()->get(), [
-            ['key' => 'name', 'label' => 'Conexão'],
-            ['key' => 'provider', 'label' => 'Banco'],
-            ['key' => 'environment', 'label' => 'Ambiente'],
-            ['key' => 'status', 'label' => 'Status'],
-            ['key' => 'accounts_count', 'label' => 'Contas'],
-            ['key' => 'last_synced_at', 'label' => 'Última sincronização'],
-        ], Company::query()->select('id', 'trade_name', 'legal_name')->get());
+        $connections = BankConnection::query()
+            ->with('company:id,trade_name,legal_name')
+            ->withCount('accounts')
+            ->latest()
+            ->get()
+            ->map(function (BankConnection $connection): array {
+                $credentials = $connection->encrypted_credentials;
+                $pix = is_array($credentials) ? data_get($credentials, 'products.pix', []) : [];
+                $settings = is_array($connection->sync_settings) ? $connection->sync_settings : [];
+
+                return [
+                    'id' => $connection->getKey(),
+                    'company_id' => $connection->company_id,
+                    'company_name' => $connection->company?->trade_name ?: $connection->company?->legal_name,
+                    'name' => $connection->name,
+                    'provider' => $connection->provider,
+                    'environment' => $connection->environment,
+                    'status' => $connection->status,
+                    'capabilities' => $connection->capabilities,
+                    'accounts_count' => $connection->accounts_count,
+                    'certificate_expires_at' => $connection->certificate_expires_at,
+                    'last_synced_at' => $connection->last_synced_at,
+                    'last_error' => $connection->last_error,
+                    'last_test_at' => $settings['last_connection_test_at'] ?? null,
+                    'last_test' => $settings['last_connection_test'] ?? null,
+                    'configured' => is_array($pix) && ! empty($pix['client_id']) && ! empty($pix['certificate_pem']),
+                    'client_id_hint' => is_array($pix) && ! empty($pix['client_id'])
+                        ? '••••'.substr((string) $pix['client_id'], -6)
+                        : null,
+                    'scope' => is_array($pix) ? ($pix['scope'] ?? null) : null,
+                    'webhook_url' => in_array(Capability::Webhooks->value, $connection->capabilities ?? [], true)
+                        ? route('bank-webhooks.pix.receive', ['bankConnection' => $connection])
+                        : null,
+                    'can_sync' => in_array(Capability::Accounts->value, $connection->capabilities ?? [], true),
+                ];
+            });
+
+        return Inertia::render('Platform/BankConnections', [
+            'connections' => $connections,
+            'companies' => Company::query()->select('id', 'trade_name', 'legal_name')->orderBy('trade_name')->get(),
+            'providers' => [
+                [
+                    'value' => 'sicredi',
+                    'label' => 'Sicredi',
+                    'default_name' => 'Sicredi Pix',
+                    'portal_url' => 'https://developer.sicredi.com.br',
+                    'capabilities' => [
+                        Capability::PixImmediate->value,
+                        Capability::PixDue->value,
+                        Capability::PixRefund->value,
+                        Capability::Webhooks->value,
+                    ],
+                ],
+                [
+                    'value' => 'bradesco',
+                    'label' => 'Bradesco',
+                    'default_name' => 'Bradesco Pix',
+                    'portal_url' => 'https://developers.bradesco.com.br',
+                    'capabilities' => [
+                        Capability::PixImmediate->value,
+                        Capability::PixRefund->value,
+                        Capability::Webhooks->value,
+                    ],
+                ],
+            ],
+            'presets' => [
+                'sicredi' => config('openfinance.sicredi.pix.environments'),
+                'bradesco' => config('openfinance.bradesco.pix.environments'),
+            ],
+        ]);
     }
 
     public function accounts(): Response
@@ -173,30 +245,124 @@ class PlatformController extends Controller
         return back()->with('success', 'Empresa criada.');
     }
 
-    public function storeBankConnection(Request $request, OrganizationContext $context): RedirectResponse
-    {
+    public function storeBankConnection(
+        Request $request,
+        OrganizationContext $context,
+        SicrediConnectionConfigurator $sicrediConfigurator,
+        BradescoConnectionConfigurator $bradescoConfigurator,
+    ): RedirectResponse {
         $this->assertAdministrator($request, $context);
-        $data = $request->validate([
-            'company_id' => ['required', 'uuid'],
-            'name' => ['required', 'string', 'max:255'],
-            'environment' => ['required', 'in:sandbox,production'],
-            'capabilities' => ['required', 'array', 'min:1'],
-            'credentials' => ['required', 'array'],
-            'certificate_expires_at' => ['nullable', 'date'],
-        ]);
+        $data = $this->validateBankConnection($request);
         abort_unless(Company::query()->whereKey($data['company_id'])->exists(), 422);
+        $configuration = match ($data['provider']) {
+            'sicredi' => $sicrediConfigurator->build($data),
+            'bradesco' => $bradescoConfigurator->build($data),
+            default => abort(422, 'Banco não suportado.'),
+        };
         BankConnection::query()->create([
             'company_id' => $data['company_id'],
-            'provider' => 'sicredi',
+            'provider' => $data['provider'],
             'name' => $data['name'],
             'environment' => $data['environment'],
-            'status' => 'active',
-            'capabilities' => $data['capabilities'],
-            'encrypted_credentials' => $data['credentials'],
-            'certificate_expires_at' => $data['certificate_expires_at'] ?? null,
+            'status' => 'draft',
+            'capabilities' => $configuration['capabilities'],
+            'encrypted_credentials' => $configuration['credentials'],
+            'certificate_expires_at' => $configuration['certificate_expires_at'],
+            'sync_settings' => ['source' => $data['provider'].'_pix', 'last_connection_test' => ['status' => 'pending']],
         ]);
 
-        return back()->with('success', 'Conexão Sicredi salva; os segredos não serão exibidos novamente.');
+        Inertia::flash('toast', ['type' => 'success', 'message' => 'Conexão salva como rascunho. Agora teste a autenticação com o '.$this->providerLabel($data['provider']).'.']);
+
+        return back();
+    }
+
+    public function updateBankConnection(
+        Request $request,
+        BankConnection $bankConnection,
+        OrganizationContext $context,
+        SicrediConnectionConfigurator $sicrediConfigurator,
+        BradescoConnectionConfigurator $bradescoConfigurator,
+    ): RedirectResponse {
+        $this->assertAdministrator($request, $context);
+        abort_unless($bankConnection->organization_id === $context->id(), 403);
+        $data = $this->validateBankConnection($request, $bankConnection->provider);
+        abort_unless(Company::query()->whereKey($data['company_id'])->exists(), 422);
+        $configuration = match ($data['provider']) {
+            'sicredi' => $sicrediConfigurator->build($data),
+            'bradesco' => $bradescoConfigurator->build($data),
+            default => abort(422, 'Banco não suportado.'),
+        };
+        $bankConnection->forceFill([
+            'company_id' => $data['company_id'],
+            'name' => $data['name'],
+            'environment' => $data['environment'],
+            'status' => 'draft',
+            'capabilities' => $configuration['capabilities'],
+            'encrypted_credentials' => $configuration['credentials'],
+            'certificate_expires_at' => $configuration['certificate_expires_at'],
+            'last_error' => null,
+            'sync_settings' => ['source' => $data['provider'].'_pix', 'last_connection_test' => ['status' => 'pending']],
+            'version' => $bankConnection->version + 1,
+        ])->save();
+
+        Inertia::flash('toast', ['type' => 'success', 'message' => 'Credenciais substituídas. Execute um novo teste de autenticação.']);
+
+        return back();
+    }
+
+    public function testBankConnection(
+        Request $request,
+        BankConnection $bankConnection,
+        OrganizationContext $context,
+        ConnectionContextFactory $contexts,
+        SicrediHttpClient $sicredi,
+        BradescoHttpClient $bradesco,
+    ): RedirectResponse {
+        $this->assertAdministrator($request, $context);
+        abort_unless($bankConnection->organization_id === $context->id(), 403);
+
+        try {
+            $client = match ($bankConnection->provider) {
+                'sicredi' => $sicredi,
+                'bradesco' => $bradesco,
+                default => abort(422, 'Banco não suportado.'),
+            };
+            $result = $contexts->with(
+                $bankConnection,
+                fn ($connectionContext): array => $client->testAuthentication($connectionContext, 'pix'),
+            );
+            $settings = is_array($bankConnection->sync_settings) ? $bankConnection->sync_settings : [];
+            $bankConnection->forceFill([
+                'status' => 'active',
+                'last_error' => null,
+                'sync_settings' => [
+                    ...$settings,
+                    'last_connection_test_at' => now('UTC')->toIso8601String(),
+                    'last_connection_test' => ['status' => 'passed', ...$result],
+                ],
+            ])->save();
+            Inertia::flash('toast', ['type' => 'success', 'message' => 'mTLS e OAuth2 validados com sucesso no '.$this->providerLabel($bankConnection->provider).'.']);
+        } catch (Throwable $exception) {
+            $providerError = $this->providerError($exception);
+            $message = $providerError['message'];
+            $settings = is_array($bankConnection->sync_settings) ? $bankConnection->sync_settings : [];
+            $bankConnection->forceFill([
+                'status' => 'action_required',
+                'last_error' => mb_substr($message, 0, 4000),
+                'sync_settings' => [
+                    ...$settings,
+                    'last_connection_test_at' => now('UTC')->toIso8601String(),
+                    'last_connection_test' => [
+                        'status' => 'failed',
+                        'http_status' => $providerError['http_status'],
+                        'provider_code' => $providerError['provider_code'],
+                    ],
+                ],
+            ])->save();
+            Inertia::flash('toast', ['type' => 'error', 'message' => $message]);
+        }
+
+        return back();
     }
 
     public function storeErpConnection(Request $request, OrganizationContext $context): RedirectResponse
@@ -265,6 +431,7 @@ class PlatformController extends Controller
     {
         abort_unless($bankConnection->organization_id === $request->user()->current_organization_id, 403);
         $this->assertOperator($request);
+        abort_unless(in_array(Capability::Accounts->value, $bankConnection->capabilities ?? [], true), 422, 'Esta conexão não oferece sincronização de contas e extrato.');
         SyncBankConnection::dispatch((string) $bankConnection->getKey());
 
         return back()->with('success', 'Sincronização adicionada à fila.');
@@ -295,6 +462,77 @@ class PlatformController extends Controller
     private function assertAdministrator(Request $request, OrganizationContext $context): void
     {
         abort_unless(in_array($request->user()->roleFor($context->get()), [OrganizationRole::Owner, OrganizationRole::Admin], true), 403);
+    }
+
+    /** @return array<string,mixed> */
+    private function validateBankConnection(Request $request, ?string $expectedProvider = null): array
+    {
+        $request->mergeIfMissing(['provider' => $expectedProvider ?? 'sicredi']);
+        $provider = (string) $request->input('provider');
+        $allowedCapabilities = match ($provider) {
+            'sicredi' => [
+                Capability::PixImmediate->value,
+                Capability::PixDue->value,
+                Capability::PixRefund->value,
+                Capability::Webhooks->value,
+            ],
+            'bradesco' => [
+                Capability::PixImmediate->value,
+                Capability::PixRefund->value,
+                Capability::Webhooks->value,
+            ],
+            default => [],
+        };
+
+        return $request->validate([
+            'provider' => ['required', Rule::in($expectedProvider ? [$expectedProvider] : ['sicredi', 'bradesco'])],
+            'company_id' => ['required', 'uuid'],
+            'name' => ['required', 'string', 'max:255'],
+            'environment' => ['required', Rule::in(['sandbox', 'production'])],
+            'capabilities' => ['required', 'array', 'min:1'],
+            'capabilities.*' => ['required', Rule::in($allowedCapabilities)],
+            'client_id' => ['required', 'string', 'max:1000'],
+            'client_secret' => ['required', 'string', 'max:2000'],
+            'pix_key' => ['nullable', 'string', 'max:100'],
+            'certificate' => ['required', 'file', 'max:512'],
+            'certificate_chain' => ['nullable', 'file', 'max:512'],
+            'private_key' => ['required', 'file', 'max:512'],
+            'private_key_passphrase' => ['nullable', 'string', 'max:1000'],
+            'webhook_secret' => [
+                Rule::requiredIf($provider === 'bradesco' && in_array(Capability::Webhooks->value, (array) $request->input('capabilities'), true)),
+                'nullable',
+                'string',
+                'min:24',
+                'max:2000',
+            ],
+        ]);
+    }
+
+    private function providerLabel(string $provider): string
+    {
+        return match ($provider) {
+            'sicredi' => 'Sicredi',
+            'bradesco' => 'Bradesco',
+            default => $provider,
+        };
+    }
+
+    /** @return array{message:string,http_status:?int,provider_code:?string} */
+    private function providerError(Throwable $exception): array
+    {
+        if ($exception instanceof SicrediProviderException || $exception instanceof BradescoProviderException) {
+            return [
+                'message' => $exception->getMessage(),
+                'http_status' => $exception->responseStatus,
+                'provider_code' => $exception->providerCode,
+            ];
+        }
+
+        return [
+            'message' => 'Não foi possível concluir o teste da conexão.',
+            'http_status' => null,
+            'provider_code' => null,
+        ];
     }
 
     private function storeReceivable(Request $request, ReceivableService $service, string $kind): RedirectResponse

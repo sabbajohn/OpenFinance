@@ -16,6 +16,8 @@ Route::middleware(['auth', 'verified', 'organization', 'sensitive.2fa', 'audit']
     Route::post('members/invitations', [InvitationController::class, 'store'])->name('members.invitations.store');
     Route::get('bank-connections', [PlatformController::class, 'bankConnections'])->name('bank-connections.index');
     Route::post('bank-connections', [PlatformController::class, 'storeBankConnection'])->name('bank-connections.store');
+    Route::patch('bank-connections/{bankConnection}', [PlatformController::class, 'updateBankConnection'])->name('bank-connections.update');
+    Route::post('bank-connections/{bankConnection}/test', [PlatformController::class, 'testBankConnection'])->name('bank-connections.test');
     Route::post('bank-connections/{bankConnection}/sync', [PlatformController::class, 'sync'])->name('bank-connections.sync');
     Route::get('bank-accounts', [PlatformController::class, 'accounts'])->name('bank-accounts.index');
     Route::get('bank-transactions', [PlatformController::class, 'transactions'])->name('bank-transactions.index');

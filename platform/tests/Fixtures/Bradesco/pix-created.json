@@ -1,0 +1,15 @@
+{
+    "status": "ATIVA",
+    "calendario": {
+        "criacao": "2026-08-13T12:00:00Z",
+        "expiracao": 3600
+    },
+    "location": "qrpix-h.bradesco.com.br/fixture-location",
+    "txid": "ERP123",
+    "revisao": 0,
+    "valor": {
+        "original": "12.34"
+    },
+    "chave": "financeiro@example.test",
+    "pixCopiaECola": "000201010212bradescofixture"
+}

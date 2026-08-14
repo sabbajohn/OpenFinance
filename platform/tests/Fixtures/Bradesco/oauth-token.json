@@ -1,0 +1,6 @@
+{
+    "access_token": "fixture-bradesco-access-token",
+    "expires_in": 3599,
+    "token_type": "Bearer",
+    "scope": "cob.read cob.write pix.read pix.write"
+}

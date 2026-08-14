@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "ea014768062715b1d0db3b37698005e2",
+    "content-hash": "1a0a8e6cdb3a06426dbc4a0b10642378",
     "packages": [
         {
             "name": "aws/aws-crt-php",
@@ -4595,6 +4595,35 @@
                 "source": "https://github.com/ramsey/uuid/tree/4.9.3"
             },
             "time": "2026-06-18T03:57:49+00:00"
+        },
+        {
+            "name": "sabbasistemas/openfinance-bank-bradesco",
+            "version": "dev-master",
+            "dist": {
+                "type": "path",
+                "url": "../packages/bank-bradesco",
+                "reference": "a345f12d56ae38cf726826b81cd158be01577439"
+            },
+            "require": {
+                "guzzlehttp/guzzle": "^7.9",
+                "php": "^8.4",
+                "psr/simple-cache": "^3.0",
+                "sabbasistemas/openfinance-core": "dev-master"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "Sabba\\OpenFinance\\Bradesco\\": "src/"
+                }
+            },
+            "license": [
+                "proprietary"
+            ],
+            "description": "Adapter Bradesco para o OpenFinance Platform.",
+            "transport-options": {
+                "symlink": true,
+                "relative": true
+            }
         },
         {
             "name": "sabbasistemas/openfinance-bank-sicredi",
@@ -10900,6 +10929,7 @@
     "aliases": [],
     "minimum-stability": "stable",
     "stability-flags": {
+        "sabbasistemas/openfinance-bank-bradesco": 20,
         "sabbasistemas/openfinance-bank-sicredi": 20,
         "sabbasistemas/openfinance-core": 20,
         "sabbasistemas/openfinance-php-sdk": 20

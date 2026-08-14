@@ -14,6 +14,40 @@ return [
         'overlap_days' => (int) env('BANK_SYNC_OVERLAP_DAYS', 3),
     ],
 
+    'sicredi' => [
+        'pix' => [
+            'environments' => [
+                'sandbox' => [
+                    'label' => 'Homologação',
+                    'base_url' => env('SICREDI_PIX_HOMOLOGATION_BASE_URL', 'https://api-pix-h.sicredi.com.br/api/v2/'),
+                    'token_url' => env('SICREDI_PIX_HOMOLOGATION_TOKEN_URL', 'https://api-pix-h.sicredi.com.br/oauth/token'),
+                ],
+                'production' => [
+                    'label' => 'Produção',
+                    'base_url' => env('SICREDI_PIX_PRODUCTION_BASE_URL', 'https://api-pix.sicredi.com.br/api/v2/'),
+                    'token_url' => env('SICREDI_PIX_PRODUCTION_TOKEN_URL', 'https://api-pix.sicredi.com.br/oauth/token'),
+                ],
+            ],
+        ],
+    ],
+
+    'bradesco' => [
+        'pix' => [
+            'environments' => [
+                'sandbox' => [
+                    'label' => 'Homologação',
+                    'base_url' => env('BRADESCO_PIX_HOMOLOGATION_BASE_URL', 'https://qrpix-h.bradesco.com.br/'),
+                    'token_url' => env('BRADESCO_PIX_HOMOLOGATION_TOKEN_URL', 'https://qrpix-h.bradesco.com.br/auth/server/oauth/token'),
+                ],
+                'production' => [
+                    'label' => 'Produção',
+                    'base_url' => env('BRADESCO_PIX_PRODUCTION_BASE_URL', 'https://qrpix.bradesco.com.br/'),
+                    'token_url' => env('BRADESCO_PIX_PRODUCTION_TOKEN_URL', 'https://qrpix.bradesco.com.br/auth/server/oauth/token'),
+                ],
+            ],
+        ],
+    ],
+
     'reconciliation' => [
         'auto_enabled' => (bool) env('RECONCILIATION_AUTO_ENABLED', true),
     ],

@@ -144,7 +144,7 @@ class ProcessReceivableOperation implements ShouldQueue
             'refund' => $provider instanceof PixReceivablesProvider
                 ? $provider->refundPix(
                     $context,
-                    (string) ($operation->payload['external_transaction_id'] ?? $externalId),
+                    $this->refundTransactionId($receivable, $operation, $externalId),
                     (string) ($operation->payload['refund_id'] ?? $operation->getKey()),
                     new Money((int) $operation->payload['amount_minor'], $receivable->currency),
                 )
@@ -157,6 +157,28 @@ class ProcessReceivableOperation implements ShouldQueue
                 : throw new RuntimeException('O adapter não oferece baixa de boleto.'),
             default => throw new RuntimeException('Operação de cobrança desconhecida.'),
         };
+    }
+
+    private function refundTransactionId(
+        Receivable $receivable,
+        ReceivableOperation $operation,
+        string $fallback,
+    ): string {
+        $metadata = $receivable->metadata ?? [];
+
+        foreach ([
+            $operation->payload['external_transaction_id'] ?? null,
+            data_get($metadata, 'last_webhook.pix.0.endToEndId'),
+            data_get($metadata, 'last_provider_operation.pix.0.endToEndId'),
+            data_get($metadata, 'provider.pix.0.endToEndId'),
+            data_get($metadata, 'provider.data.pix.0.endToEndId'),
+        ] as $candidate) {
+            if (is_string($candidate) && $candidate !== '') {
+                return $candidate;
+            }
+        }
+
+        return $fallback;
     }
 
     private function normalizeStatus(string $providerStatus, string $action, string $fallback): string

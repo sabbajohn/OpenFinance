@@ -17,6 +17,13 @@ class RequireTwoFactorForSensitiveRole
         if ($user === null) {
             abort(401);
         }
+
+        // A autenticação forte protege comandos e alterações, mas não deve
+        // impedir que o usuário conheça e navegue pela plataforma.
+        if ($request->isMethodSafe()) {
+            return $next($request);
+        }
+
         $role = $user->roleFor($this->context->get());
 
         if ($role?->requiresTwoFactor() && ! $user->two_factor_confirmed_at) {

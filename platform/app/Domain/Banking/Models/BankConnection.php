@@ -18,6 +18,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string $status
  * @property list<string> $capabilities
  * @property array<string,mixed>|null $encrypted_credentials
+ * @property array<string,mixed>|null $sync_settings
  * @property CarbonImmutable|null $certificate_expires_at
  * @property CarbonImmutable|null $last_synced_at
  * @property int $version

@@ -20,6 +20,36 @@ use Sabba\OpenFinance\Sicredi\SicrediProvider;
 
 class SicrediProviderContractTest extends TestCase
 {
+    public function test_it_uses_http_basic_and_returns_safe_authentication_diagnostics(): void
+    {
+        $history = [];
+        $mock = new MockHandler([
+            new Response(200, ['Content-Type' => 'application/json'], json_encode([
+                'access_token' => 'sensitive-token',
+                'expires_in' => 3599,
+                'token_type' => 'Bearer',
+                'scope' => 'cob.read cob.write',
+            ], JSON_THROW_ON_ERROR)),
+        ]);
+        $handler = HandlerStack::create($mock);
+        $handler->push(Middleware::history($history));
+        $client = new SicrediHttpClient(new ArrayPsrCache, handler: $handler);
+
+        $result = $client->testAuthentication($this->context(), 'pix');
+
+        $this->assertSame('Bearer', $result['token_type']);
+        $this->assertSame(3599, $result['expires_in']);
+        $this->assertSame(['cob.read', 'cob.write'], $result['scope']);
+        $this->assertArrayNotHasKey('access_token', $result);
+
+        $request = $history[0]['request'];
+        $this->assertSame('Basic '.base64_encode('fixture-client:fixture-secret'), $request->getHeaderLine('Authorization'));
+        parse_str((string) $request->getBody(), $body);
+        $this->assertSame('client_credentials', $body['grant_type']);
+        $this->assertArrayNotHasKey('client_id', $body);
+        $this->assertArrayNotHasKey('client_secret', $body);
+    }
+
     public function test_it_normalizes_sicredi_fixtures_and_serializes_money_exactly(): void
     {
         $history = [];
@@ -56,7 +86,6 @@ class SicrediProviderContractTest extends TestCase
             reference: 'erp-title-1',
             amount: new Money(1234),
             dueAt: null,
-            options: ['pix_key' => 'financeiro@example.test'],
         ));
         $this->assertSame('erp-title-1', $pix->externalId);
         $this->assertSame(1234, $pix->amount->minor);
@@ -65,6 +94,7 @@ class SicrediProviderContractTest extends TestCase
         $pixRequest = $history[4]['request'];
         $this->assertSame('PUT', $pixRequest->getMethod());
         $this->assertStringContainsString('"original":"12.34"', (string) $pixRequest->getBody());
+        $this->assertStringContainsString('"chave":"financeiro@example.test"', (string) $pixRequest->getBody());
         $this->assertSame('Bearer fixture-access-token', $pixRequest->getHeaderLine('Authorization'));
     }
 
@@ -90,7 +120,10 @@ class SicrediProviderContractTest extends TestCase
             connectionId: '019ff716-1d34-7151-b320-f34e87ca26ab',
             companyId: '019ff716-1d34-7151-b320-f34e87ca26ac',
             environment: 'sandbox',
-            credentials: ['products' => ['accounts' => $product, 'pix' => $product]],
+            credentials: [
+                'default_pix_key' => 'financeiro@example.test',
+                'products' => ['accounts' => $product, 'pix' => $product],
+            ],
         );
     }
 }

@@ -1,0 +1,17 @@
+{
+    "name": "sabbasistemas/openfinance-bank-bradesco",
+    "description": "Adapter Bradesco para o OpenFinance Platform.",
+    "type": "library",
+    "license": "proprietary",
+    "require": {
+        "php": "^8.4",
+        "guzzlehttp/guzzle": "^7.9",
+        "psr/simple-cache": "^3.0",
+        "sabbasistemas/openfinance-core": "dev-master"
+    },
+    "autoload": {
+        "psr-4": {
+            "Sabba\\OpenFinance\\Bradesco\\": "src/"
+        }
+    }
+}

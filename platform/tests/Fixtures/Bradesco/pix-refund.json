@@ -1,0 +1,9 @@
+{
+    "id": "REFUND123",
+    "rtrId": "D237202608130000000000000000001",
+    "valor": "5.00",
+    "horario": {
+        "solicitacao": "2026-08-13T12:05:00Z"
+    },
+    "status": "EM_PROCESSAMENTO"
+}

@@ -25,6 +25,13 @@
         },
         {
             "type": "path",
+            "url": "../packages/bank-bradesco",
+            "options": {
+                "symlink": true
+            }
+        },
+        {
+            "type": "path",
             "url": "../packages/php-sdk",
             "options": {
                 "symlink": true
@@ -42,6 +49,7 @@
         "laravel/wayfinder": "^0.1.14",
         "league/flysystem-aws-s3-v3": "^3.35",
         "predis/predis": "^3.5",
+        "sabbasistemas/openfinance-bank-bradesco": "dev-master",
         "sabbasistemas/openfinance-bank-sicredi": "dev-master",
         "sabbasistemas/openfinance-core": "dev-master"
     },

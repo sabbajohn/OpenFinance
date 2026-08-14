@@ -111,7 +111,7 @@ final readonly class SicrediProvider implements AccountDataProvider, BoletoRecei
         $payload = [
             'calendario' => $due ? ['dataDeVencimento' => $command->dueAt->format('Y-m-d')] : ['expiracao' => $command->options['expires_in'] ?? 3600],
             'valor' => ['original' => $command->amount->toDecimal()],
-            'chave' => $command->options['pix_key'] ?? null,
+            'chave' => $command->options['pix_key'] ?? $context->credentials['default_pix_key'] ?? null,
             'solicitacaoPagador' => $command->options['message'] ?? null,
             ...($command->payer ? ['devedor' => $command->payer] : []),
         ];

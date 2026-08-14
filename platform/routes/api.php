@@ -14,7 +14,12 @@ use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function (): void {
     Route::get('/health', fn () => response()->json(['data' => ['status' => 'ok', 'time' => now()->toIso8601String()]]));
-    Route::post('/webhooks/banks/{bankConnection}', BankWebhookController::class)->middleware('throttle:600,1');
+    Route::post('/webhooks/banks/{bankConnection}', BankWebhookController::class)
+        ->middleware('throttle:600,1')
+        ->name('bank-webhooks.receive');
+    Route::post('/webhooks/banks/{bankConnection}/pix', BankWebhookController::class)
+        ->middleware('throttle:600,1')
+        ->name('bank-webhooks.pix.receive');
 
     Route::middleware(['api.client', 'audit'])->group(function (): void {
         Route::post('/erp/accounts/bulk', [ErpMirrorController::class, 'accounts'])

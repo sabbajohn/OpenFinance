@@ -1,6 +1,6 @@
 <?php
 
-namespace Sabba\OpenFinance\Sicredi;
+namespace Sabba\OpenFinance\Bradesco;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
@@ -8,7 +8,7 @@ use GuzzleHttp\HandlerStack;
 use Psr\SimpleCache\CacheInterface;
 use Sabba\OpenFinance\Core\DTO\ConnectionContext;
 
-final readonly class SicrediHttpClient
+final readonly class BradescoHttpClient
 {
     public function __construct(
         private CacheInterface $cache,
@@ -25,18 +25,7 @@ final readonly class SicrediHttpClient
         array $options = [],
     ): array {
         $config = $this->productConfig($context, $product);
-        $client = new Client([
-            'base_uri' => rtrim((string) $config['base_url'], '/').'/',
-            'timeout' => $this->timeoutSeconds,
-            'connect_timeout' => 5,
-            'cert' => $config['certificate_path'] ?? null,
-            'ssl_key' => isset($config['private_key_path'])
-                ? [$config['private_key_path'], $config['private_key_passphrase'] ?? '']
-                : null,
-            'http_errors' => false,
-            ...($this->handler ? ['handler' => $this->handler] : []),
-        ]);
-
+        $client = $this->client($config, true);
         $options['headers'] = [
             'Accept' => 'application/json',
             'Authorization' => 'Bearer '.$this->accessToken($context, $product, $config),
@@ -47,21 +36,10 @@ final readonly class SicrediHttpClient
         try {
             $response = $client->request($method, ltrim($path, '/'), $options);
         } catch (GuzzleException $exception) {
-            throw new SicrediProviderException('Falha de transporte na API Sicredi: '.$exception->getMessage(), previous: $exception);
+            throw new BradescoProviderException('Falha de transporte na API Bradesco: '.$exception->getMessage(), previous: $exception);
         }
 
-        $body = (string) $response->getBody();
-        $decoded = $body === '' ? [] : json_decode($body, true);
-
-        if ($response->getStatusCode() >= 400) {
-            throw new SicrediProviderException(
-                message: (string) ($decoded['message'] ?? $decoded['error']['message'] ?? 'A API Sicredi rejeitou a operação.'),
-                responseStatus: $response->getStatusCode(),
-                providerCode: $decoded['code'] ?? $decoded['error']['code'] ?? null,
-            );
-        }
-
-        return is_array($decoded) ? $decoded : [];
+        return $this->decodeResponse($response->getStatusCode(), (string) $response->getBody(), 'A API Bradesco rejeitou a operação.');
     }
 
     /**
@@ -83,7 +61,7 @@ final readonly class SicrediHttpClient
     /** @param array<string,mixed> $config */
     private function accessToken(ConnectionContext $context, string $product, array $config): string
     {
-        $key = 'sicredi:token:'.hash('sha256', implode('|', [
+        $key = 'bradesco:token:'.hash('sha256', implode('|', [
             $context->connectionId,
             $product,
             (string) $config['client_id'],
@@ -108,16 +86,7 @@ final readonly class SicrediHttpClient
      */
     private function fetchAccessToken(array $config): array
     {
-        $client = new Client([
-            'timeout' => $this->timeoutSeconds,
-            'connect_timeout' => 5,
-            'cert' => $config['certificate_path'] ?? null,
-            'ssl_key' => isset($config['private_key_path'])
-                ? [$config['private_key_path'], $config['private_key_passphrase'] ?? '']
-                : null,
-            'http_errors' => false,
-            ...($this->handler ? ['handler' => $this->handler] : []),
-        ]);
+        $client = $this->client($config);
 
         try {
             $response = $client->post((string) $config['token_url'], [
@@ -129,21 +98,61 @@ final readonly class SicrediHttpClient
                 'headers' => ['Accept' => 'application/json'],
             ]);
         } catch (GuzzleException $exception) {
-            throw new SicrediProviderException('Falha ao autenticar na API Sicredi: '.$exception->getMessage(), previous: $exception);
+            throw new BradescoProviderException('Falha ao autenticar na API Bradesco: '.$exception->getMessage(), previous: $exception);
         }
 
-        $decoded = json_decode((string) $response->getBody(), true);
-        $token = is_array($decoded) ? ($decoded['access_token'] ?? null) : null;
-
-        if ($response->getStatusCode() >= 400 || ! is_string($token)) {
-            $message = is_array($decoded)
-                ? ($decoded['error_description'] ?? $decoded['message'] ?? $decoded['error']['message'] ?? null)
-                : null;
-
-            throw new SicrediProviderException(
-                is_string($message) && $message !== '' ? $message : 'Não foi possível obter o token OAuth2 do Sicredi.',
+        $decoded = $this->decodeResponse(
+            $response->getStatusCode(),
+            (string) $response->getBody(),
+            'Não foi possível obter o token OAuth2 do Bradesco.',
+        );
+        if (! is_string($decoded['access_token'] ?? null) || $decoded['access_token'] === '') {
+            throw new BradescoProviderException(
+                'Não foi possível obter o token OAuth2 do Bradesco.',
                 $response->getStatusCode(),
-                is_array($decoded) ? ($decoded['code'] ?? (is_string($decoded['error'] ?? null) ? $decoded['error'] : null)) : null,
+            );
+        }
+
+        return $decoded;
+    }
+
+    /** @param array<string,mixed> $config */
+    private function client(array $config, bool $withBaseUri = false): Client
+    {
+        return new Client([
+            ...($withBaseUri ? ['base_uri' => rtrim((string) $config['base_url'], '/').'/'] : []),
+            'timeout' => $this->timeoutSeconds,
+            'connect_timeout' => 5,
+            'cert' => $config['certificate_path'] ?? null,
+            'ssl_key' => isset($config['private_key_path'])
+                ? [$config['private_key_path'], $config['private_key_passphrase'] ?? '']
+                : null,
+            'http_errors' => false,
+            ...($this->handler ? ['handler' => $this->handler] : []),
+        ]);
+    }
+
+    /** @return array<string,mixed> */
+    private function decodeResponse(int $status, string $body, string $fallbackMessage): array
+    {
+        $decoded = $body === '' ? [] : json_decode($body, true);
+        $decoded = is_array($decoded) ? $decoded : [];
+
+        if ($status >= 400) {
+            $message = $decoded['error_description']
+                ?? $decoded['message']
+                ?? $decoded['mensagem']
+                ?? $decoded['detail']
+                ?? (is_array($decoded['error'] ?? null) ? ($decoded['error']['message'] ?? null) : null);
+            $code = $decoded['code']
+                ?? $decoded['codigo']
+                ?? (is_string($decoded['error'] ?? null) ? $decoded['error'] : null)
+                ?? (is_array($decoded['error'] ?? null) ? ($decoded['error']['code'] ?? null) : null);
+
+            throw new BradescoProviderException(
+                is_string($message) && $message !== '' ? $message : $fallbackMessage,
+                $status,
+                is_scalar($code) ? (string) $code : null,
             );
         }
 
@@ -156,7 +165,7 @@ final readonly class SicrediHttpClient
         $config = $context->credentials['products'][$product] ?? null;
 
         if (! is_array($config) || empty($config['base_url']) || empty($config['token_url']) || empty($config['client_id']) || empty($config['client_secret'])) {
-            throw new SicrediProviderException("Credenciais do produto Sicredi [{$product}] não configuradas.");
+            throw new BradescoProviderException("Credenciais do produto Bradesco [{$product}] não configuradas.");
         }
 
         return $config;

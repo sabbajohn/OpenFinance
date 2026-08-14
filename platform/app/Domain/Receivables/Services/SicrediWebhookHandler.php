@@ -26,7 +26,11 @@ final readonly class SicrediWebhookHandler
             return;
         }
 
-        $providerStatus = strtolower((string) $this->find($payload, ['status', 'situacao']) ?: $receivable->status);
+        $providerStatus = strtolower((string) $this->find($payload, ['status', 'situacao']) ?: (
+            $event->event_type === 'bradesco.webhook' && is_array($payload['pix'] ?? null)
+                ? 'paid'
+                : $receivable->status
+        ));
         $status = match ($providerStatus) {
             'concluida', 'concluído', 'paid', 'liquidado', 'liquidada' => 'paid',
             'devolvido', 'refunded' => 'refunded',
@@ -38,10 +42,12 @@ final readonly class SicrediWebhookHandler
             return;
         }
 
+        $providerPaidAt = data_get($payload, 'pix.0.horario');
         $receivable->forceFill([
             'status' => $status,
-            'paid_at' => $status === 'paid' ? now('UTC') : $receivable->paid_at,
+            'paid_at' => $status === 'paid' ? ($providerPaidAt ?: now('UTC')) : $receivable->paid_at,
             'cancelled_at' => in_array($status, ['cancelled', 'expired'], true) ? now('UTC') : $receivable->cancelled_at,
+            'metadata' => [...($receivable->metadata ?? []), 'last_webhook' => $payload],
             'version' => $receivable->version + 1,
         ])->save();
         $verb = match ($status) {
@@ -59,7 +65,6 @@ final readonly class SicrediWebhookHandler
         ], $event->correlation_id);
     }
 
-    /** @param array<string,mixed> $payload */
     /**
      * @param  array<string,mixed>  $payload
      * @param  list<string>  $keys

@@ -46,7 +46,7 @@ class ProcessInboxEvent implements ShouldQueue
         }
 
         $payload = $payloads->readJson($event->rawPayload()->firstOrFail());
-        if ($event->event_type === 'sicredi.webhook') {
+        if (in_array($event->event_type, ['sicredi.webhook', 'bradesco.webhook'], true)) {
             $sicrediWebhooks->handle($event, $payload);
         }
 
