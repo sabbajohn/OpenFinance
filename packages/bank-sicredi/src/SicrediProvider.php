@@ -155,7 +155,7 @@ final readonly class SicrediProvider implements AccountDataProvider, BoletoRecei
     public function receivedPix(PixReceiptQuery $query): TransactionPage
     {
         $page = max(0, (int) ($query->cursor ?? 0));
-        $taxId = preg_replace('/\D+/', '', (string) $query->payerTaxId) ?? '';
+        $taxId = strtoupper(preg_replace('/[^0-9A-Z]+/i', '', (string) $query->payerTaxId) ?? '');
         $response = $this->http->request(
             $query->context,
             'pix',
@@ -233,7 +233,12 @@ final readonly class SicrediProvider implements AccountDataProvider, BoletoRecei
             'json' => array_filter($payload, fn (mixed $value): bool => $value !== null && $value !== []),
         ]);
 
-        return $this->receivableResult($response, $command->amount, $command->reference);
+        return $this->receivableResult(
+            $response,
+            $command->amount,
+            $command->reference,
+            ['nossoNumero', 'id', 'externalId', 'txid'],
+        );
     }
 
     public function getBoleto(ConnectionContext $context, string $externalId, ?string $subtype = null): ReceivableResult
@@ -246,7 +251,12 @@ final readonly class SicrediProvider implements AccountDataProvider, BoletoRecei
             ]),
         ]);
 
-        return $this->receivableResult($response, $this->moneyFromResponse($response), $externalId);
+        return $this->receivableResult(
+            $response,
+            $this->moneyFromResponse($response),
+            $externalId,
+            ['nossoNumero', 'id', 'externalId', 'txid'],
+        );
     }
 
     public function cancelBoleto(ConnectionContext $context, string $externalId, ?string $subtype = null): ReceivableResult
@@ -258,7 +268,12 @@ final readonly class SicrediProvider implements AccountDataProvider, BoletoRecei
             ],
         ]);
 
-        return $this->receivableResult($response, $this->moneyFromResponse($response), $externalId);
+        return $this->receivableResult(
+            $response,
+            $this->moneyFromResponse($response),
+            $externalId,
+            ['nossoNumero', 'id', 'externalId', 'txid'],
+        );
     }
 
     public function updateBoleto(ConnectionContext $context, string $externalId, array $changes, ?string $subtype = null): ReceivableResult
@@ -273,7 +288,12 @@ final readonly class SicrediProvider implements AccountDataProvider, BoletoRecei
             ], fn (mixed $value): bool => $value !== null && $value !== []),
         ]);
 
-        return $this->receivableResult($response, $this->moneyFromResponse($response), $externalId);
+        return $this->receivableResult(
+            $response,
+            $this->moneyFromResponse($response),
+            $externalId,
+            ['nossoNumero', 'id', 'externalId', 'txid'],
+        );
     }
 
     public function verify(ConnectionContext $context, ServerRequestInterface $request): bool
@@ -286,16 +306,21 @@ final readonly class SicrediProvider implements AccountDataProvider, BoletoRecei
         return $secret !== '' && hash_equals($secret, $received);
     }
 
-    private function receivableResult(array $response, Money $fallbackAmount, string $fallbackId): ReceivableResult
-    {
+    /** @param list<string> $externalIdKeys */
+    private function receivableResult(
+        array $response,
+        Money $fallbackAmount,
+        string $fallbackId,
+        array $externalIdKeys = ['txid', 'nossoNumero', 'id', 'externalId'],
+    ): ReceivableResult {
         $data = $this->firstObject($response, ['data', 'body', 'cobv']);
         $paidAt = $this->nullable($this->value($data, ['paidAt', 'dataLiquidacao', 'pix.0.horario', 'horario.liquidacao']));
 
         return new ReceivableResult(
-            externalId: (string) $this->value($data, ['txid', 'nossoNumero', 'id', 'externalId'], $fallbackId),
+            externalId: (string) $this->value($data, $externalIdKeys, $fallbackId),
             status: $this->receivableStatus((string) $this->value($data, ['status', 'situacao'], 'pending')),
             amount: $this->moneyFromResponse($data, $fallbackAmount),
-            copyAndPaste: $this->nullable($this->value($data, ['pixCopiaECola', 'copyAndPaste', 'brcode'])),
+            copyAndPaste: $this->nullable($this->value($data, ['pixCopiaECola', 'copyAndPaste', 'brcode', 'qrCode', 'codigoQrCode'])),
             barcode: $this->nullable($this->value($data, ['codigoBarras', 'barcode'])),
             digitableLine: $this->nullable($this->value($data, ['linhaDigitavel', 'digitableLine'])),
             paidAt: $paidAt ? new DateTimeImmutable($paidAt) : null,
@@ -323,7 +348,7 @@ final readonly class SicrediProvider implements AccountDataProvider, BoletoRecei
 
     private function moneyFromResponse(array $response, ?Money $fallback = null): Money
     {
-        $value = $this->value($response, ['valor.0.original', 'valor.original', 'valor', 'amount']);
+        $value = $this->value($response, ['valor.0.original', 'valor.original', 'valorNominal', 'valor', 'amount']);
 
         return $value !== null ? Money::fromDecimal((string) $value) : ($fallback ?? new Money(0));
     }
@@ -342,7 +367,7 @@ final readonly class SicrediProvider implements AccountDataProvider, BoletoRecei
     private function receivableStatus(string $status): string
     {
         return match (mb_strtolower($status)) {
-            'ativa', 'active', 'created' => 'active',
+            'ativa', 'active', 'created', 'em_carteira' => 'active',
             'concluida', 'concluída', 'concluido', 'concluído', 'paid', 'liquidado', 'liquidada' => 'paid',
             'devolvido', 'devolvida', 'refunded' => 'refunded',
             'removida_pelo_usuario_recebedor', 'removida_pelo_psp', 'cancelado', 'cancelada', 'removed' => 'cancelled',
@@ -455,7 +480,9 @@ final readonly class SicrediProvider implements AccountDataProvider, BoletoRecei
     {
         return array_filter([
             'cpf' => isset($payer['cpf']) ? preg_replace('/\D+/', '', (string) $payer['cpf']) : null,
-            'cnpj' => isset($payer['cnpj']) ? preg_replace('/\D+/', '', (string) $payer['cnpj']) : null,
+            'cnpj' => isset($payer['cnpj'])
+                ? strtoupper(preg_replace('/[^0-9A-Z]+/i', '', (string) $payer['cnpj']) ?? '')
+                : null,
             'nome' => $payer['nome'] ?? $payer['name'] ?? null,
         ], fn (mixed $value): bool => $value !== null && $value !== '');
     }

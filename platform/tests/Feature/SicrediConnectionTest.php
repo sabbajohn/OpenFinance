@@ -107,6 +107,7 @@ class SicrediConnectionTest extends TestCase
             'capabilities' => ['pix.immediate'],
             'client_id' => 'replacement-client',
             'client_secret' => 'replacement-secret',
+            'pix_key' => 'financeiro@example.test',
             'webhook_secret' => null,
             'certificate' => UploadedFile::fake()->createWithContent('renovado.cer', $replacementCertificate),
             'private_key' => UploadedFile::fake()->createWithContent('renovado.key', $replacementPrivateKey),
@@ -183,6 +184,26 @@ class SicrediConnectionTest extends TestCase
         $this->assertSame('cobranca', $tokenBody['scope']);
     }
 
+    public function test_a_pix_key_is_required_when_sicredi_pix_charges_are_enabled(): void
+    {
+        [$user, $company] = $this->administrator();
+        [$certificate, $privateKey] = $this->certificatePair();
+
+        $this->actingAs($user)->post(route('bank-connections.store'), [
+            'product' => 'pix',
+            'company_id' => $company->getKey(),
+            'name' => 'Sicredi Pix sem chave',
+            'environment' => 'sandbox',
+            'capabilities' => ['pix.immediate'],
+            'client_id' => 'fixture-client',
+            'client_secret' => 'fixture-secret',
+            'certificate' => UploadedFile::fake()->createWithContent('aplicacao.cer', $certificate),
+            'private_key' => UploadedFile::fake()->createWithContent('aplicacao.key', $privateKey),
+        ])->assertSessionHasErrors('pix_key');
+
+        $this->assertDatabaseCount('bank_connections', 0);
+    }
+
     public function test_a_mismatched_private_key_is_rejected(): void
     {
         [$user, $company] = $this->administrator();
@@ -196,6 +217,7 @@ class SicrediConnectionTest extends TestCase
             'capabilities' => ['pix.immediate'],
             'client_id' => 'fixture-client',
             'client_secret' => 'fixture-secret',
+            'pix_key' => 'financeiro@example.test',
             'certificate' => UploadedFile::fake()->createWithContent('aplicacao.cer', $certificate),
             'private_key' => UploadedFile::fake()->createWithContent('outra.key', $otherPrivateKey),
         ])->assertSessionHasErrors('private_key');

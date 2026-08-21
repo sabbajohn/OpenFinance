@@ -202,6 +202,14 @@ const isEditing = computed(() => editingId.value !== null);
 const usesMtls = computed(
     () => selectedProduct.value?.auth_mode === 'mtls_client_credentials',
 );
+const requiresPixKey = computed(
+    () =>
+        form.provider === 'sicredi' &&
+        form.product === 'pix' &&
+        form.capabilities.some((capability) =>
+            ['pix.immediate', 'pix.due', 'webhooks'].includes(capability),
+        ),
+);
 
 const applySandboxDefaults = () => {
     if (
@@ -729,11 +737,13 @@ const formatDate = (value?: string | null) =>
                                 >
                                     Chave Pix padrão
                                     <span
+                                        v-if="!requiresPixKey"
                                         class="font-normal text-muted-foreground"
                                         >(opcional)</span
                                     >
                                     <input
                                         v-model="form.pix_key"
+                                        :required="requiresPixKey"
                                         placeholder="E-mail, telefone, CPF/CNPJ ou chave aleatória"
                                     />
                                     <span

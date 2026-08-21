@@ -74,6 +74,16 @@ final class SicrediConnectionConfigurator
 
         /** @var list<string> $capabilities */
         $capabilities = array_values(array_unique($data['capabilities']));
+        $requiresPixKey = array_intersect($capabilities, [
+            'pix.immediate',
+            'pix.due',
+            'webhooks',
+        ]) !== [];
+        if ($requiresPixKey && blank($data['pix_key'] ?? null)) {
+            throw ValidationException::withMessages([
+                'pix_key' => 'Informe a chave Pix vinculada à conta para cobranças e webhooks.',
+            ]);
+        }
         $certificatePem = trim($certificate['pem']);
         if ($chain !== null) {
             $certificatePem .= "\n".trim($chain['pem']);

@@ -48,11 +48,13 @@ SICREDI_BOLETO_SANDBOX_BASE_URL=https://api-parceiro.sicredi.com.br/sb/cobranca/
 SICREDI_BOLETO_SANDBOX_TOKEN_URL=https://api-parceiro.sicredi.com.br/sb/auth/openapi/token
 SICREDI_BOLETO_PRODUCTION_BASE_URL=https://api-parceiro.sicredi.com.br/cobranca/boleto/v1/
 SICREDI_BOLETO_PRODUCTION_TOKEN_URL=https://api-parceiro.sicredi.com.br/auth/openapi/token
-SICREDI_PIX_HOMOLOGATION_BASE_URL=https://api-pix-h.sicredi.com.br/api/v2/
-SICREDI_PIX_HOMOLOGATION_TOKEN_URL=https://api-pix-h.sicredi.com.br/oauth/token
+SICREDI_PIX_HOMOLOGATION_BASE_URL=
+SICREDI_PIX_HOMOLOGATION_TOKEN_URL=
 SICREDI_PIX_PRODUCTION_BASE_URL=https://api-pix.sicredi.com.br/api/v2/
 SICREDI_PIX_PRODUCTION_TOKEN_URL=https://api-pix.sicredi.com.br/oauth/token
 ```
+
+As URLs de homologação do Pix não são públicas. Preencha as duas variáveis somente com os endereços entregues pelo Sicredi na liberação do ambiente; a aplicação rejeita o cadastro Sandbox enquanto elas estiverem vazias.
 
 As credenciais e os arquivos PEM são criptografados com a `APP_KEY`, materializados com permissão `0600` somente durante a chamada e apagados ao final. Consulte o [Portal do Desenvolvedor Sicredi](https://developer.sicredi.com.br) para adesão, certificados e escopos habilitados.
 

@@ -45,7 +45,7 @@ final readonly class SicrediHttpClient
     }
 
     /**
-     * Valida mTLS e OAuth2 sem executar uma operação financeira.
+     * Valida OAuth2 e, quando aplicável, mTLS sem executar uma operação financeira.
      *
      * @return array{token_type:string,expires_in:int,scope:list<string>}
      */
@@ -69,15 +69,40 @@ final readonly class SicrediHttpClient
             (string) ($config['client_id'] ?? $config['username'] ?? ''),
             (string) $config['token_url'],
         ]));
+        $accessTokenKey = $key.':access';
+        $refreshTokenKey = $key.':refresh';
 
-        if ($token = $this->cache->get($key)) {
+        if ($token = $this->cache->get($accessTokenKey)) {
             return (string) $token;
         }
 
-        $decoded = $this->fetchAccessToken($config);
+        $refreshToken = $this->cache->get($refreshTokenKey);
+        if (is_string($refreshToken) && $refreshToken !== '') {
+            try {
+                $decoded = $this->fetchAccessToken($config, $refreshToken);
+            } catch (SicrediProviderException $exception) {
+                if (! in_array($exception->responseStatus, [400, 401], true)) {
+                    throw $exception;
+                }
+
+                $this->cache->delete($refreshTokenKey);
+                $decoded = $this->fetchAccessToken($config);
+                $refreshToken = null;
+            }
+        } else {
+            $decoded = $this->fetchAccessToken($config);
+            $refreshToken = null;
+        }
+
         $token = (string) $decoded['access_token'];
-        $ttl = max(30, ((int) ($decoded['expires_in'] ?? 300)) - 30);
-        $this->cache->set($key, $token, $ttl);
+        $accessTokenTtl = max(1, ((int) ($decoded['expires_in'] ?? 300)) - 30);
+        $this->cache->set($accessTokenKey, $token, $accessTokenTtl);
+
+        $nextRefreshToken = $decoded['refresh_token'] ?? $refreshToken;
+        if (is_string($nextRefreshToken) && $nextRefreshToken !== '') {
+            $refreshTokenTtl = max(1, ((int) ($decoded['refresh_expires_in'] ?? 1800)) - 30);
+            $this->cache->set($refreshTokenKey, $nextRefreshToken, $refreshTokenTtl);
+        }
 
         return $token;
     }
@@ -86,16 +111,19 @@ final readonly class SicrediHttpClient
      * @param  array<string,mixed>  $config
      * @return array<string,mixed>
      */
-    private function fetchAccessToken(array $config): array
+    private function fetchAccessToken(array $config, ?string $refreshToken = null): array
     {
         $client = $this->client($config);
-        $grantType = (string) ($config['grant_type'] ?? 'client_credentials');
+        $grantType = $refreshToken !== null
+            ? 'refresh_token'
+            : (string) ($config['grant_type'] ?? 'client_credentials');
         $request = [
             'form_params' => array_filter([
                 'grant_type' => $grantType,
                 'username' => $grantType === 'password' ? ($config['username'] ?? null) : null,
                 'password' => $grantType === 'password' ? ($config['password'] ?? null) : null,
-                'scope' => $config['scope'] ?? null,
+                'refresh_token' => $grantType === 'refresh_token' ? $refreshToken : null,
+                'scope' => $grantType !== 'refresh_token' ? ($config['scope'] ?? null) : null,
             ], fn (mixed $value): bool => $value !== null && $value !== ''),
             'headers' => [
                 'Accept' => 'application/json',

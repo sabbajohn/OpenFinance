@@ -153,6 +153,81 @@ class SicrediProviderContractTest extends TestCase
         }
     }
 
+    public function test_it_creates_reads_refunds_and_filters_sicredi_pix_with_the_official_contract(): void
+    {
+        $history = [];
+        $handler = HandlerStack::create(new MockHandler([
+            $this->fixtureResponse('oauth-token.json'),
+            new Response(201, ['Content-Type' => 'application/json'], json_encode([
+                'txid' => 'ERP98765432109876543210987',
+                'status' => 'ATIVA',
+                'valor' => ['original' => '45.67'],
+                'pixCopiaECola' => '000201010212sicrediduefixture',
+            ], JSON_THROW_ON_ERROR)),
+            new Response(200, ['Content-Type' => 'application/json'], json_encode([
+                'txid' => 'ERP98765432109876543210987',
+                'status' => 'CONCLUIDA',
+                'valor' => ['original' => '45.67'],
+                'pix' => [['horario' => '2026-08-21T18:00:00Z']],
+            ], JSON_THROW_ON_ERROR)),
+            new Response(201, ['Content-Type' => 'application/json'], json_encode([
+                'id' => 'REFUND123',
+                'status' => 'EM_PROCESSAMENTO',
+                'valor' => '5.00',
+            ], JSON_THROW_ON_ERROR)),
+            new Response(200, ['Content-Type' => 'application/json'], json_encode([
+                'parametros' => ['paginacao' => ['paginaAtual' => 0, 'quantidadeDePaginas' => 1]],
+                'pix' => [],
+            ], JSON_THROW_ON_ERROR)),
+        ]));
+        $handler->push(Middleware::history($history));
+        $provider = new SicrediProvider(new SicrediHttpClient(new ArrayPsrCache, handler: $handler));
+        $context = $this->context();
+
+        $created = $provider->createPix($context, new ReceivableCommand(
+            idempotencyKey: 'fixture-due-idempotency',
+            reference: 'ERP98765432109876543210987',
+            amount: new Money(4567),
+            dueAt: new DateTimeImmutable('2026-09-20'),
+            payer: ['cnpj' => '12.ABC.678/0001-DE', 'nome' => 'Empresa Teste'],
+        ));
+        $paid = $provider->getPix($context, 'ERP98765432109876543210987', 'due');
+        $refund = $provider->refundPix(
+            $context,
+            'E748202608210000000000000000001',
+            'REFUND123',
+            new Money(500),
+        );
+        $provider->receivedPix(new PixReceiptQuery(
+            context: $context,
+            from: new DateTimeImmutable('2026-08-21T00:00:00Z'),
+            to: new DateTimeImmutable('2026-08-21T23:59:59Z'),
+            payerTaxId: '12.ABC.678/0001-DE',
+        ));
+
+        $this->assertSame('active', $created->status);
+        $this->assertSame('000201010212sicrediduefixture', $created->copyAndPaste);
+        $this->assertSame('paid', $paid->status);
+        $this->assertSame('2026-08-21T18:00:00+00:00', $paid->paidAt?->format(DATE_ATOM));
+        $this->assertSame('REFUND123', $refund->externalId);
+        $this->assertSame('pending', $refund->status);
+
+        $this->assertSame('PUT', $history[1]['request']->getMethod());
+        $this->assertSame('/cobv/ERP98765432109876543210987', $history[1]['request']->getUri()->getPath());
+        $duePayload = json_decode((string) $history[1]['request']->getBody(), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame(['dataDeVencimento' => '2026-09-20', 'validadeAposVencimento' => 30], $duePayload['calendario']);
+        $this->assertSame(['original' => '45.67'], $duePayload['valor']);
+        $this->assertSame(['cnpj' => '12ABC6780001DE', 'nome' => 'Empresa Teste'], $duePayload['devedor']);
+        $this->assertSame('GET', $history[2]['request']->getMethod());
+        $this->assertSame('/cobv/ERP98765432109876543210987', $history[2]['request']->getUri()->getPath());
+        $this->assertSame('/pix/E748202608210000000000000000001/devolucao/REFUND123', $history[3]['request']->getUri()->getPath());
+        $this->assertStringContainsString('"valor":"5.00"', (string) $history[3]['request']->getBody());
+        parse_str($history[4]['request']->getUri()->getQuery(), $receivedQuery);
+        $this->assertSame('12ABC6780001DE', $receivedQuery['cnpj']);
+        $this->assertSame('2026-08-21T00:00:00.000+00:00', $receivedQuery['inicio']);
+        $this->assertSame('2026-08-21T23:59:59.000+00:00', $receivedQuery['fim']);
+    }
+
     public function test_it_authenticates_and_creates_a_sicredi_billing_boleto(): void
     {
         $history = [];
@@ -164,6 +239,8 @@ class SicrediProviderContractTest extends TestCase
                 'scope' => 'cobranca',
             ], JSON_THROW_ON_ERROR)),
             new Response(201, ['Content-Type' => 'application/json'], json_encode([
+                'txid' => 'sandbox-default-txid',
+                'qrCode' => 'sandbox-default-qr-code',
                 'linhaDigitavel' => '74891125110061420512803153351030188640000050000',
                 'codigoBarras' => '74891886400000500001125100614205120315335103',
                 'nossoNumero' => '251006142',
@@ -184,6 +261,7 @@ class SicrediProviderContractTest extends TestCase
 
         $this->assertSame('251006142', $boleto->externalId);
         $this->assertSame('74891125110061420512803153351030188640000050000', $boleto->digitableLine);
+        $this->assertSame('sandbox-default-qr-code', $boleto->copyAndPaste);
 
         $tokenRequest = $history[0]['request'];
         $this->assertSame('fixture-x-api-key', $tokenRequest->getHeaderLine('x-api-key'));
@@ -202,6 +280,69 @@ class SicrediProviderContractTest extends TestCase
         $this->assertSame('HIBRIDO', $payload['tipoCobranca']);
         $this->assertSame('500.00', $payload['valor']);
         $this->assertSame('PESSOA_FISICA', $payload['pagador']['tipoPessoa']);
+    }
+
+    public function test_it_renews_sicredi_billing_access_with_the_refresh_token(): void
+    {
+        $history = [];
+        $mock = new MockHandler([
+            new Response(200, ['Content-Type' => 'application/json'], json_encode([
+                'access_token' => 'first-access-token',
+                'refresh_token' => 'first-refresh-token',
+                'expires_in' => 300,
+                'refresh_expires_in' => 1800,
+                'token_type' => 'Bearer',
+                'scope' => 'cobranca profile email',
+            ], JSON_THROW_ON_ERROR)),
+            new Response(200, ['Content-Type' => 'application/json'], json_encode([
+                'nossoNumero' => '251006142',
+                'valorNominal' => 500,
+                'situacao' => 'EM_CARTEIRA',
+            ], JSON_THROW_ON_ERROR)),
+            new Response(200, ['Content-Type' => 'application/json'], json_encode([
+                'access_token' => 'renewed-access-token',
+                'refresh_token' => 'renewed-refresh-token',
+                'expires_in' => 300,
+                'refresh_expires_in' => 1800,
+                'token_type' => 'Bearer',
+                'scope' => 'cobranca profile email',
+            ], JSON_THROW_ON_ERROR)),
+            new Response(200, ['Content-Type' => 'application/json'], json_encode([
+                'nossoNumero' => '251006142',
+                'valorNominal' => 500,
+                'situacao' => 'EM_CARTEIRA',
+            ], JSON_THROW_ON_ERROR)),
+        ]);
+        $handler = HandlerStack::create($mock);
+        $handler->push(Middleware::history($history));
+        $cache = new ArrayPsrCache;
+        $provider = new SicrediProvider(new SicrediHttpClient($cache, handler: $handler));
+        $context = $this->billingContext();
+
+        $boleto = $provider->getBoleto($context, '251006142');
+        $this->assertSame('251006142', $boleto->externalId);
+        $this->assertSame('active', $boleto->status);
+        $this->assertSame(50000, $boleto->amount->minor);
+
+        $tokenCacheKey = 'sicredi:token:'.hash('sha256', implode('|', [
+            $context->connectionId,
+            'boleto',
+            '123456789',
+            'https://sicredi.fixture.test/sb/auth/openapi/token',
+        ]));
+        $cache->delete($tokenCacheKey.':access');
+
+        $provider->getBoleto($context, '251006142');
+
+        parse_str((string) $history[2]['request']->getBody(), $refreshBody);
+        $this->assertSame('refresh_token', $refreshBody['grant_type']);
+        $this->assertSame('first-refresh-token', $refreshBody['refresh_token']);
+        $this->assertArrayNotHasKey('username', $refreshBody);
+        $this->assertArrayNotHasKey('password', $refreshBody);
+        $this->assertArrayNotHasKey('scope', $refreshBody);
+        $this->assertSame('fixture-x-api-key', $history[2]['request']->getHeaderLine('x-api-key'));
+        $this->assertSame('COBRANCA', $history[2]['request']->getHeaderLine('context'));
+        $this->assertSame('Bearer renewed-access-token', $history[3]['request']->getHeaderLine('Authorization'));
     }
 
     private function fixtureResponse(string $name): Response

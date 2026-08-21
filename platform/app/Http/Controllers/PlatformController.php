@@ -631,6 +631,13 @@ class PlatformController extends Controller
         $usesMtls = $product === 'pix' || $provider === 'bradesco';
         $usesSicrediBilling = $provider === 'sicredi' && $product === 'boleto';
         $usesBradescoBilling = $provider === 'bradesco' && $product === 'boleto';
+        $usesSicrediPixKey = $provider === 'sicredi'
+            && $product === 'pix'
+            && array_intersect((array) $request->input('capabilities'), [
+                Capability::PixImmediate->value,
+                Capability::PixDue->value,
+                Capability::Webhooks->value,
+            ]) !== [];
 
         return $request->validate([
             'provider' => ['required', Rule::in($expectedProvider ? [$expectedProvider] : ['sicredi', 'bradesco'])],
@@ -642,7 +649,7 @@ class PlatformController extends Controller
             'capabilities.*' => ['required', Rule::in($allowedCapabilities)],
             'client_id' => [Rule::requiredIf($usesMtls), 'nullable', 'string', 'max:1000'],
             'client_secret' => [Rule::requiredIf($usesMtls), 'nullable', 'string', 'max:2000'],
-            'pix_key' => ['nullable', 'string', 'max:100'],
+            'pix_key' => [Rule::requiredIf($usesSicrediPixKey), 'nullable', 'string', 'max:100'],
             'x_api_key' => [Rule::requiredIf($usesSicrediBilling), 'nullable', 'string', 'max:2000'],
             'beneficiary_code' => [Rule::requiredIf($usesSicrediBilling), 'nullable', 'regex:/^\d{5}$/'],
             'cooperative_code' => [Rule::requiredIf($usesSicrediBilling), 'nullable', 'regex:/^\d{4}$/'],
